@@ -1678,8 +1678,9 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       ([RTTI "T_fraction"; Quad numerator; Quad denominator] , 1 + 2* word_size)
     | ScmNumber (ScmReal x) ->
        ([RTTI "T_real"; QuadFloat x], 1 + word_size)
-    | ScmVector s ->
-       raise (X_not_yet_implemented "final project")
+    | ScmVector s -> (*#(() #t #f*)
+      let addrs = List.map (fun element_in_vector -> ConstPtr(search_constant_address element_in_vector table)) s in
+      ([RTTI "T_vector"; Quad (List.length addrs)] @ addrs, word_size + 1 + word_size * (List.length addrs))
     | ScmPair (car, cdr) ->
        raise (X_not_yet_implemented "final project");;
 
