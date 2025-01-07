@@ -1528,7 +1528,7 @@ module Code_Generation (* : CODE_GENERATION *) = struct
 
   let global_bindings_table =
     [ (* 1-10 *)
-      ("null?", "L_code_ptr_is_null");
+      (*("null?", "L_code_ptr_is_null");
       ("pair?", "L_code_ptr_is_pair");
       ("void?", "L_code_ptr_is_void");
       ("char?", "L_code_ptr_is_char");
@@ -1615,12 +1615,12 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       ("primitive?", "L_code_ptr_is_primitive");
       ("length", "L_code_ptr_length");
       ("make-list", "L_code_ptr_make_list");
-      ("return", "L_code_ptr_return");
+      ("return", "L_code_ptr_return");*)
     ];;  
 
   let collect_constants =
     let rec run = function
-      | _ -> raise (X_not_yet_implemented "final project")
+    | ScmConst' (sexp) -> [sexp] 
     and runs exprs' =
       List.fold_left (fun consts expr' -> consts @ (run expr')) [] exprs'
     in
@@ -1668,14 +1668,14 @@ module Code_Generation (* : CODE_GENERATION *) = struct
     | ScmChar ch ->
        ([RTTI "T_char"; Byte (int_of_char ch)], 2)
     | ScmString str ->
-       raise (X_not_yet_implemented "final project")
+       (([RTTI "T_string"; Quad (String.length str); ASCII str], 9 + (String.length str)))
     | ScmSymbol sym ->
        let addr = search_constant_address (ScmString sym) table in
        ([RTTI "T_interned_symbol"; ConstPtr addr], 1 + word_size)
     | ScmNumber (ScmInteger n) ->
        ([RTTI "T_integer"; Quad n], 1 + word_size)
     | ScmNumber (ScmFraction (numerator, denominator)) ->
-       raise (X_not_yet_implemented "final project")
+      ([RTTI "T_fraction"; Quad numerator; Quad denominator] , 1 + 2* word_size)
     | ScmNumber (ScmReal x) ->
        ([RTTI "T_real"; QuadFloat x], 1 + word_size)
     | ScmVector s ->
