@@ -1,0 +1,2902 @@
+     1                                  ;;; prologue-1.asm
+     2                                  ;;; The first part of the standard prologue for compiled programs
+     3                                  ;;;
+     4                                  ;;; Programmer: Mayer Goldberg, 2023
+     5                                  
+     6                                  %define T_void 				0
+     7                                  %define T_nil 				1
+     8                                  %define T_char 				2
+     9                                  %define T_string 			3
+    10                                  %define T_closure 			4
+    11                                  %define T_undefined			5
+    12                                  %define T_boolean 			8
+    13                                  %define T_boolean_false 		(T_boolean | 1)
+    14                                  %define T_boolean_true 			(T_boolean | 2)
+    15                                  %define T_number 			16
+    16                                  %define T_integer			(T_number | 1)
+    17                                  %define T_fraction 			(T_number | 2)
+    18                                  %define T_real 				(T_number | 3)
+    19                                  %define T_collection 			32
+    20                                  %define T_pair 				(T_collection | 1)
+    21                                  %define T_vector 			(T_collection | 2)
+    22                                  %define T_symbol 			64
+    23                                  %define T_interned_symbol		(T_symbol | 1)
+    24                                  %define T_uninterned_symbol		(T_symbol | 2)
+    25                                  
+    26                                  %define SOB_CHAR_VALUE(reg) 		byte [reg + 1]
+    27                                  %define SOB_PAIR_CAR(reg)		qword [reg + 1]
+    28                                  %define SOB_PAIR_CDR(reg)		qword [reg + 1 + 8]
+    29                                  %define SOB_STRING_LENGTH(reg)		qword [reg + 1]
+    30                                  %define SOB_VECTOR_LENGTH(reg)		qword [reg + 1]
+    31                                  %define SOB_CLOSURE_ENV(reg)		qword [reg + 1]
+    32                                  %define SOB_CLOSURE_CODE(reg)		qword [reg + 1 + 8]
+    33                                  
+    34                                  %define OLD_RBP 			qword [rbp]
+    35                                  %define RET_ADDR 			qword [rbp + 8 * 1]
+    36                                  %define ENV 				qword [rbp + 8 * 2]
+    37                                  %define COUNT 				qword [rbp + 8 * 3]
+    38                                  %define PARAM(n) 			qword [rbp + 8 * (4 + n)]
+    39                                  %define AND_KILL_FRAME(n)		(8 * (2 + n))
+    40                                  
+    41                                  %define MAGIC				496351
+    42                                  
+    43                                  %macro ENTER 0
+    44                                  	enter 0, 0
+    45                                  	and rsp, ~15
+    46                                  %endmacro
+    47                                  
+    48                                  %macro LEAVE 0
+    49                                  	leave
+    50                                  %endmacro
+    51                                  
+    52                                  %macro assert_type 2
+    53                                          cmp byte [%1], %2
+    54                                          jne L_error_incorrect_type
+    55                                  %endmacro
+    56                                  
+    57                                  %define assert_void(reg)		assert_type reg, T_void
+    58                                  %define assert_nil(reg)			assert_type reg, T_nil
+    59                                  %define assert_char(reg)		assert_type reg, T_char
+    60                                  %define assert_string(reg)		assert_type reg, T_string
+    61                                  %define assert_symbol(reg)		assert_type reg, T_symbol
+    62                                  %define assert_interned_symbol(reg)	assert_type reg, T_interned_symbol
+    63                                  %define assert_uninterned_symbol(reg)	assert_type reg, T_uninterned_symbol
+    64                                  %define assert_closure(reg)		assert_type reg, T_closure
+    65                                  %define assert_boolean(reg)		assert_type reg, T_boolean
+    66                                  %define assert_integer(reg)		assert_type reg, T_integer
+    67                                  %define assert_fraction(reg)		assert_type reg, T_fraction
+    68                                  %define assert_real(reg)		assert_type reg, T_real
+    69                                  %define assert_pair(reg)		assert_type reg, T_pair
+    70                                  %define assert_vector(reg)		assert_type reg, T_vector
+    71                                  
+    72                                  %define sob_void			(L_constants + 0)
+    73                                  %define sob_nil				(L_constants + 1)
+    74                                  %define sob_boolean_false		(L_constants + 2)
+    75                                  %define sob_boolean_true		(L_constants + 3)
+    76                                  %define sob_char_nul			(L_constants + 4)
+    77                                  
+    78                                  %define bytes(n)			(n)
+    79                                  %define kbytes(n) 			(bytes(n) << 10)
+    80                                  %define mbytes(n) 			(kbytes(n) << 10)
+    81                                  %define gbytes(n) 			(mbytes(n) << 10)
+    82                                  
+    83                                  section .data
+    84                                  L_constants:
+    85                                  	; L_constants + 0:
+    86 00000000 00                      	db T_void
+    87                                  	; L_constants + 1:
+    88 00000001 01                      	db T_nil
+    89                                  	; L_constants + 2:
+    90 00000002 09                      	db T_boolean_false
+    91                                  	; L_constants + 3:
+    92 00000003 0A                      	db T_boolean_true
+    93                                  	; L_constants + 4:
+    94 00000004 0200                    	db T_char, 0x00	; #\nul
+    95                                  	; L_constants + 6:
+    96 00000006 03                      	db T_string	; "x"
+    97 00000007 0100000000000000        	dq 1
+    98 0000000F 78                      	db 0x78
+    99                                  free_var_0:	; location of x
+   100 00000010 [1800000000000000]      	dq .undefined_object
+   101                                  .undefined_object:
+   102 00000018 05                      	db T_undefined
+   103 00000019 [0600000000000000]      	dq L_constants + 6
+   104                                  
+   105                                  
+   106                                  extern printf, fprintf, stdout, stderr, fwrite, exit, putchar, getchar
+   107                                  global main
+   108                                  section .text
+   109                                  main:
+   110 00000000 C8000000                        enter 0, 0
+   111 00000004 6A00                            push 0
+   112 00000006 6A00                            push 0
+   113 00000008 68[1E000000]                    push Lend
+   114 0000000D C8000000                        enter 0, 0
+   115                                  
+   116 00000011 488B0425[10000000]      	mov rax, qword [free_var_0]	; free var x
+   117 00000019 803805                  	cmp byte [rax], T_undefined
+   118 0000001C 743E                    	je L_error_fvar_undefined
+   119                                  Lend:
+   120 0000001E 4889C7                  	mov rdi, rax
+   121 00000021 E8B8030000              	call print_sexpr_if_not_void
+   122                                  
+   123 00000026 48BF-                           mov rdi, fmt_memory_usage
+   123 00000028 [B900000000000000] 
+   124 00000030 488B3425[3F010000]              mov rsi, qword [top_of_memory]
+   125 00000038 4881EE[00000000]                sub rsi, memory
+   126 0000003F B800000000                      mov rax, 0
+   127                                          ENTER
+    44 00000044 C8000000            <1>  enter 0, 0
+    45 00000048 4883E4F0            <1>  and rsp, ~15
+   128 0000004C E8(00000000)                    call printf
+   129                                          LEAVE
+    49 00000051 C9                  <1>  leave
+   130 00000052 B800000000                      mov rax, 0
+   131 00000057 E8(00000000)                    call exit
+   132                                  
+   133                                  L_error_fvar_undefined:
+   134 0000005C 50                              push rax
+   135 0000005D 488B3C25[00000000]              mov rdi, qword [stderr]  ; destination
+   136 00000065 48BE-                           mov rsi, fmt_undefined_free_var_1
+   136 00000067 [2100000000000000] 
+   137 0000006F B800000000                      mov rax, 0
+   138                                          ENTER
+    44 00000074 C8000000            <1>  enter 0, 0
+    45 00000078 4883E4F0            <1>  and rsp, ~15
+   139 0000007C E8(00000000)                    call fprintf
+   140                                          LEAVE
+    49 00000081 C9                  <1>  leave
+   141 00000082 58                              pop rax
+   142 00000083 488B4001                        mov rax, qword [rax + 1] ; string
+   143 00000087 488D7809                        lea rdi, [rax + 1 + 8]   ; actual characters
+   144 0000008B BE01000000                      mov rsi, 1               ; sizeof(char)
+   145 00000090 488B5001                        mov rdx, qword [rax + 1] ; string-length
+   146 00000094 488B0C25[00000000]              mov rcx, qword [stderr]  ; destination
+   147 0000009C B800000000                      mov rax, 0
+   148                                          ENTER
+    44 000000A1 C8000000            <1>  enter 0, 0
+    45 000000A5 4883E4F0            <1>  and rsp, ~15
+   149 000000A9 E8(00000000)                    call fwrite
+   150                                          LEAVE
+    49 000000AE C9                  <1>  leave
+   151 000000AF 488B3C25[00000000]              mov rdi, [stderr]       ; destination
+   152 000000B7 48BE-                           mov rsi, fmt_undefined_free_var_2
+   152 000000B9 [3800000000000000] 
+   153 000000C1 B800000000                      mov rax, 0
+   154                                          ENTER
+    44 000000C6 C8000000            <1>  enter 0, 0
+    45 000000CA 4883E4F0            <1>  and rsp, ~15
+   155 000000CE E8(00000000)                    call fprintf
+   156                                          LEAVE
+    49 000000D3 C9                  <1>  leave
+   157 000000D4 48C7C0F6FFFFFF                  mov rax, -10
+   158 000000DB E8(00000000)                    call exit
+   159                                  
+   160                                  L_error_non_closure:
+   161 000000E0 488B3C25[00000000]              mov rdi, qword [stderr]
+   162 000000E8 48BE-                           mov rsi, fmt_non_closure
+   162 000000EA [EF00000000000000] 
+   163 000000F2 B800000000                      mov rax, 0
+   164                                          ENTER
+    44 000000F7 C8000000            <1>  enter 0, 0
+    45 000000FB 4883E4F0            <1>  and rsp, ~15
+   165 000000FF E8(00000000)                    call fprintf
+   166                                          LEAVE
+    49 00000104 C9                  <1>  leave
+   167 00000105 48C7C0FEFFFFFF                  mov rax, -2
+   168 0000010C E8(00000000)                    call exit
+   169                                  
+   170                                  L_error_improper_list:
+   171 00000111 488B3C25[00000000]      	mov rdi, qword [stderr]
+   172 00000119 48BE-                   	mov rsi, fmt_error_improper_list
+   172 0000011B [1701000000000000] 
+   173 00000123 B800000000              	mov rax, 0
+   174                                          ENTER
+    44 00000128 C8000000            <1>  enter 0, 0
+    45 0000012C 4883E4F0            <1>  and rsp, ~15
+   175 00000130 E8(00000000)            	call fprintf
+   176                                          LEAVE
+    49 00000135 C9                  <1>  leave
+   177 00000136 48C7C0F9FFFFFF          	mov rax, -7
+   178 0000013D E8(00000000)            	call exit
+   179                                  
+   180                                  L_error_incorrect_arity_simple:
+   181 00000142 488B3C25[00000000]              mov rdi, qword [stderr]
+   182 0000014A 48BE-                           mov rsi, fmt_incorrect_arity_simple
+   182 0000014C [5A00000000000000] 
+   183 00000154 EB12                            jmp L_error_incorrect_arity_common
+   184                                  L_error_incorrect_arity_opt:
+   185 00000156 488B3C25[00000000]              mov rdi, qword [stderr]
+   186 0000015E 48BE-                           mov rsi, fmt_incorrect_arity_opt
+   186 00000160 [8500000000000000] 
+   187                                  L_error_incorrect_arity_common:
+   188 00000168 5A                              pop rdx
+   189 00000169 59                              pop rcx
+   190 0000016A B800000000                      mov rax, 0
+   191                                          ENTER
+    44 0000016F C8000000            <1>  enter 0, 0
+    45 00000173 4883E4F0            <1>  and rsp, ~15
+   192 00000177 E8(00000000)                    call fprintf
+   193                                          LEAVE
+    49 0000017C C9                  <1>  leave
+   194 0000017D 48C7C0FAFFFFFF                  mov rax, -6
+   195 00000184 E8(00000000)                    call exit
+   196                                  
+   197                                  section .data
+   198                                  fmt_undefined_free_var_1:
+   199 00000021 212121205468652066-             db `!!! The free variable \0`
+   199 0000002A 726565207661726961-
+   199 00000033 626C652000         
+   200                                  fmt_undefined_free_var_2:
+   201 00000038 207761732075736564-             db ` was used before it was defined.\n\0`
+   201 00000041 206265666F72652069-
+   201 0000004A 742077617320646566-
+   201 00000053 696E65642E0A00     
+   202                                  fmt_incorrect_arity_simple:
+   203 0000005A 212121204578706563-             db `!!! Expected %ld arguments, but given %ld\n\0`
+   203 00000063 74656420256C642061-
+   203 0000006C 7267756D656E74732C-
+   203 00000075 206275742067697665-
+   203 0000007E 6E20256C640A00     
+   204                                  fmt_incorrect_arity_opt:
+   205 00000085 212121204578706563-             db `!!! Expected at least %ld arguments, but given %ld\n\0`
+   205 0000008E 746564206174206C65-
+   205 00000097 61737420256C642061-
+   205 000000A0 7267756D656E74732C-
+   205 000000A9 206275742067697665-
+   205 000000B2 6E20256C640A00     
+   206                                  fmt_memory_usage:
+   207 000000B9 0A2121212055736564-             db `\n!!! Used %ld bytes of dynamically-allocated memory\n\n\0`
+   207 000000C2 20256C642062797465-
+   207 000000CB 73206F662064796E61-
+   207 000000D4 6D6963616C6C792D61-
+   207 000000DD 6C6C6F636174656420-
+   207 000000E6 6D656D6F72790A0A00 
+   208                                  fmt_non_closure:
+   209 000000EF 21212120417474656D-             db `!!! Attempting to apply a non-closure!\n\0`
+   209 000000F8 7074696E6720746F20-
+   209 00000101 6170706C792061206E-
+   209 0000010A 6F6E2D636C6F737572-
+   209 00000113 65210A00           
+   210                                  fmt_error_improper_list:
+   211 00000117 212121205468652061-     	db `!!! The argument is not a proper list!\n\0`
+   211 00000120 7267756D656E742069-
+   211 00000129 73206E6F7420612070-
+   211 00000132 726F706572206C6973-
+   211 0000013B 74210A00           
+   212                                  
+   213                                  section .bss
+   214                                  memory:
+   215 00000000 <res 40000000h>         	resb gbytes(1)
+   216                                  
+   217                                  section .data
+   218                                  top_of_memory:
+   219 0000013F [0000000000000000]              dq memory
+   220                                  
+   221                                  section .text
+   222                                  malloc:
+   223 00000189 488B0425[3F010000]              mov rax, qword [top_of_memory]
+   224 00000191 48013C25[3F010000]              add qword [top_of_memory], rdi
+   225 00000199 C3                              ret
+   226                                  
+   227                                  L_code_ptr_return:
+   228 0000019A 48837C241002            	cmp qword [rsp + 8*2], 2
+   229 000001A0 0F85461C0000            	jne L_error_arg_count_2
+   230 000001A6 488B4C2418              	mov rcx, qword [rsp + 8*3]
+   231                                  	assert_integer(rcx)
+    53 000001AB 803911              <1>  cmp byte [%1], %2
+    54 000001AE 0F85D71C0000        <1>  jne L_error_incorrect_type
+   232 000001B4 488B4901                	mov rcx, qword [rcx + 1]
+   233 000001B8 4883F900                	cmp rcx, 0
+   234 000001BC 0F8C5E1B0000            	jl L_error_integer_range
+   235 000001C2 488B442420              	mov rax, qword [rsp + 8*4]
+   236                                  .L0:
+   237 000001C7 4883F900                        cmp rcx, 0
+   238 000001CB 7409                            je .L1
+   239 000001CD 488B6D00                	mov rbp, qword [rbp]
+   240 000001D1 48FFC9                  	dec rcx
+   241 000001D4 7FF1                    	jg .L0
+   242                                  .L1:
+   243 000001D6 4889EC                  	mov rsp, rbp
+   244 000001D9 5D                      	pop rbp
+   245 000001DA 5B                              pop rbx
+   246 000001DB 488B4C2408                      mov rcx, qword [rsp + 8*1]
+   247 000001E0 488D64CC10                      lea rsp, [rsp + 8*rcx + 8*2]
+   248 000001E5 FFE3                    	jmp rbx
+   249                                  
+   250                                  L_code_ptr_make_list:
+   251 000001E7 C8000000                	enter 0, 0
+   252 000001EB 48837D1801                      cmp COUNT, 1
+   253 000001F0 740C                            je .L0
+   254 000001F2 48837D1802                      cmp COUNT, 2
+   255 000001F7 7411                            je .L1
+   256 000001F9 E9231C0000                      jmp L_error_arg_count_12
+   257                                  .L0:
+   258 000001FE 49B9-                           mov r9, sob_void
+   258 00000200 [0000000000000000] 
+   259 00000208 EB04                            jmp .L2
+   260                                  .L1:
+   261 0000020A 4C8B4D28                        mov r9, PARAM(1)
+   262                                  .L2:
+   263 0000020E 488B4D20                        mov rcx, PARAM(0)
+   264                                          assert_integer(rcx)
+    53 00000212 803911              <1>  cmp byte [%1], %2
+    54 00000215 0F85701C0000        <1>  jne L_error_incorrect_type
+   265 0000021B 488B4901                        mov rcx, qword [rcx + 1]
+   266 0000021F 4883F900                        cmp rcx, 0
+   267 00000223 0F8C281B0000                    jl L_error_arg_negative
+   268 00000229 49B8-                           mov r8, sob_nil
+   268 0000022B [0100000000000000] 
+   269                                  .L3:
+   270 00000233 4883F900                        cmp rcx, 0
+   271 00000237 7E1D                            jle .L4
+   272 00000239 BF11000000                      mov rdi, 1 + 8 + 8
+   273 0000023E E846FFFFFF                      call malloc
+   274 00000243 C60021                          mov byte [rax], T_pair
+   275 00000246 4C894801                        mov qword [rax + 1], r9
+   276 0000024A 4C894009                        mov qword [rax + 1 + 8], r8
+   277 0000024E 4989C0                          mov r8, rax
+   278 00000251 48FFC9                          dec rcx
+   279 00000254 EBDD                            jmp .L3
+   280                                  .L4:
+   281 00000256 4C89C0                          mov rax, r8
+   282 00000259 48837D1802                      cmp COUNT, 2
+   283 0000025E 7404                            je .L5
+   284 00000260 C9                              leave
+   285 00000261 C21800                          ret AND_KILL_FRAME(1)
+   286                                  .L5:
+   287 00000264 C9                      	leave
+   288 00000265 C22000                  	ret AND_KILL_FRAME(2)
+   289                                  
+   290                                  L_code_ptr_is_primitive:
+   291 00000268 C8000000                	enter 0, 0
+   292 0000026C 48837D1801              	cmp COUNT, 1
+   293 00000271 0F85401B0000            	jne L_error_arg_count_1
+   294 00000277 488B4520                	mov rax, PARAM(0)
+   295                                  	assert_closure(rax)
+    53 0000027B 803804              <1>  cmp byte [%1], %2
+    54 0000027E 0F85071C0000        <1>  jne L_error_incorrect_type
+   296 00000284 4883780100              	cmp SOB_CLOSURE_ENV(rax), 0
+   297 00000289 750C                    	jne .L_false
+   298 0000028B 48B8-                   	mov rax, sob_boolean_true
+   298 0000028D [0300000000000000] 
+   299 00000295 EB0A                    	jmp .L_end
+   300                                  .L_false:
+   301 00000297 48B8-                   	mov rax, sob_boolean_false
+   301 00000299 [0200000000000000] 
+   302                                  .L_end:
+   303 000002A1 C9                      	leave
+   304 000002A2 C21800                  	ret AND_KILL_FRAME(1)
+   305                                  
+   306                                  L_code_ptr_length:
+   307 000002A5 C8000000                	enter 0, 0
+   308 000002A9 48837D1801              	cmp COUNT, 1
+   309 000002AE 0F85031B0000            	jne L_error_arg_count_1
+   310 000002B4 488B5D20                	mov rbx, PARAM(0)
+   311 000002B8 BF00000000              	mov rdi, 0
+   312                                  .L:
+   313 000002BD 803B01                  	cmp byte [rbx], T_nil
+   314 000002C0 7412                    	je .L_end
+   315                                  	assert_pair(rbx)
+    53 000002C2 803B21              <1>  cmp byte [%1], %2
+    54 000002C5 0F85C01B0000        <1>  jne L_error_incorrect_type
+   316 000002CB 488B5B09                	mov rbx, SOB_PAIR_CDR(rbx)
+   317 000002CF 48FFC7                  	inc rdi
+   318 000002D2 EBE9                    	jmp .L
+   319                                  .L_end:
+   320 000002D4 E82D1A0000              	call make_integer
+   321 000002D9 C9                      	leave
+   322 000002DA C21800                  	ret AND_KILL_FRAME(1)
+   323                                  
+   324                                  L_code_ptr_break:
+   325 000002DD 48837C241000                    cmp qword [rsp + 8 * 2], 0
+   326 000002E3 0F85991A0000                    jne L_error_arg_count_0
+   327 000002E9 CC                              int3
+   328 000002EA 48B8-                           mov rax, sob_void
+   328 000002EC [0000000000000000] 
+   329 000002F4 C21000                          ret AND_KILL_FRAME(0)        
+   330                                  
+   331                                  L_code_ptr_frame:
+   332 000002F7 C8000000                        enter 0, 0
+   333 000002FB 48837D1800                      cmp COUNT, 0
+   334 00000300 0F857C1A0000                    jne L_error_arg_count_0
+   335                                  
+   336 00000306 48BF-                           mov rdi, fmt_frame
+   336 00000308 [4701000000000000] 
+   337 00000310 488B7500                        mov rsi, qword [rbp]    ; old rbp
+   338 00000314 488B5608                        mov rdx, qword [rsi + 8*1] ; ret addr
+   339 00000318 488B4E10                        mov rcx, qword [rsi + 8*2] ; lexical environment
+   340 0000031C 4C8B4618                        mov r8, qword [rsi + 8*3] ; count
+   341 00000320 4C8D4E20                        lea r9, [rsi + 8*4]       ; address of argument 0
+   342 00000324 6A00                            push 0
+   343 00000326 4151                            push r9
+   344 00000328 4150                            push r8                   ; we'll use it when printing the params
+   345 0000032A B800000000                      mov rax, 0
+   346                                          
+   347                                          ENTER
+    44 0000032F C8000000            <1>  enter 0, 0
+    45 00000333 4883E4F0            <1>  and rsp, ~15
+   348 00000337 E8(00000000)                    call printf
+   349                                          LEAVE
+    49 0000033C C9                  <1>  leave
+   350                                  
+   351                                  .L:
+   352 0000033D 488B0C24                        mov rcx, qword [rsp]
+   353 00000341 4883F900                        cmp rcx, 0
+   354 00000345 7467                            je .L_out
+   355 00000347 48BF-                           mov rdi, fmt_frame_param_prefix
+   355 00000349 [8001000000000000] 
+   356 00000351 488B742410                      mov rsi, qword [rsp + 8*2]
+   357 00000356 B800000000                      mov rax, 0
+   358                                          
+   359                                          ENTER
+    44 0000035B C8000000            <1>  enter 0, 0
+    45 0000035F 4883E4F0            <1>  and rsp, ~15
+   360 00000363 E8(00000000)                    call printf
+   361                                          LEAVE
+    49 00000368 C9                  <1>  leave
+   362                                  
+   363 00000369 488B0C24                        mov rcx, qword [rsp]
+   364 0000036D 48FFC9                          dec rcx
+   365 00000370 48890C24                        mov qword [rsp], rcx    ; dec arg count
+   366 00000374 48FF442410                      inc qword [rsp + 8*2]   ; increment index of current arg
+   367 00000379 488B7C2408                      mov rdi, qword [rsp + 8*1] ; addr of addr current arg
+   368 0000037E 4C8D4F08                        lea r9, [rdi + 8]          ; addr of next arg
+   369 00000382 4C894C2408                      mov qword [rsp + 8*1], r9  ; backup addr of next arg
+   370 00000387 488B3F                          mov rdi, qword [rdi]       ; addr of current arg
+   371 0000038A E87B000000                      call print_sexpr
+   372 0000038F 48BF-                           mov rdi, fmt_newline
+   372 00000391 [AC01000000000000] 
+   373 00000399 B800000000                      mov rax, 0
+   374                                          ENTER
+    44 0000039E C8000000            <1>  enter 0, 0
+    45 000003A2 4883E4F0            <1>  and rsp, ~15
+   375 000003A6 E8(00000000)                    call printf
+   376                                          LEAVE
+    49 000003AB C9                  <1>  leave
+   377 000003AC EB8F                            jmp .L
+   378                                  .L_out:
+   379 000003AE 48BF-                           mov rdi, fmt_frame_continue
+   379 000003B0 [9101000000000000] 
+   380 000003B8 B800000000                      mov rax, 0
+   381                                          ENTER
+    44 000003BD C8000000            <1>  enter 0, 0
+    45 000003C1 4883E4F0            <1>  and rsp, ~15
+   382 000003C5 E8(00000000)                    call printf
+   383 000003CA E8(00000000)                    call getchar
+   384                                          LEAVE
+    49 000003CF C9                  <1>  leave
+   385                                          
+   386 000003D0 48B8-                           mov rax, sob_void
+   386 000003D2 [0000000000000000] 
+   387 000003DA C9                              leave
+   388 000003DB C21000                          ret AND_KILL_FRAME(0)
+   389                                          
+   390                                  print_sexpr_if_not_void:
+   391 000003DE 4881FF[00000000]        	cmp rdi, sob_void
+   392 000003E5 7422                    	je .done
+   393 000003E7 E81E000000              	call print_sexpr
+   394 000003EC 48BF-                   	mov rdi, fmt_newline
+   394 000003EE [AC01000000000000] 
+   395 000003F6 B800000000              	mov rax, 0
+   396                                  	ENTER
+    44 000003FB C8000000            <1>  enter 0, 0
+    45 000003FF 4883E4F0            <1>  and rsp, ~15
+   397 00000403 E8(00000000)            	call printf
+   398                                  	LEAVE
+    49 00000408 C9                  <1>  leave
+   399                                  .done:
+   400 00000409 C3                      	ret
+   401                                  
+   402                                  section .data
+   403                                  fmt_frame:
+   404 00000147 524250203D2025703B-             db `RBP = %p; ret addr = %p; lex env = %p; param count = %d\n\0`
+   404 00000150 207265742061646472-
+   404 00000159 203D2025703B206C65-
+   404 00000162 7820656E76203D2025-
+   404 0000016B 703B20706172616D20-
+   404 00000174 636F756E74203D2025-
+   404 0000017D 640A00             
+   405                                  fmt_frame_param_prefix:
+   406 00000180 3D3D5B706172616D20-             db `==[param %d]==> \0`
+   406 00000189 25645D3D3D3E2000   
+   407                                  fmt_frame_continue:
+   408 00000191 486974203C456E7465-             db `Hit <Enter> to continue...\0`
+   408 0000019A 723E20746F20636F6E-
+   408 000001A3 74696E75652E2E2E00 
+   409                                  fmt_newline:
+   410 000001AC 0A00                    	db `\n\0`
+   411                                  fmt_void:
+   412 000001AE 233C766F69643E00        	db `#<void>\0`
+   413                                  fmt_nil:
+   414 000001B6 282900                  	db `()\0`
+   415                                  fmt_boolean_false:
+   416 000001B9 236600                  	db `#f\0`
+   417                                  fmt_boolean_true:
+   418 000001BC 237400                  	db `#t\0`
+   419                                  fmt_char_backslash:
+   420 000001BF 235C5C00                	db `#\\\\\0`
+   421                                  fmt_char_dquote:
+   422 000001C3 235C2200                	db `#\\"\0`
+   423                                  fmt_char_simple:
+   424 000001C7 235C256300              	db `#\\%c\0`
+   425                                  fmt_char_null:
+   426 000001CC 235C6E756C00            	db `#\\nul\0`
+   427                                  fmt_char_bell:
+   428 000001D2 235C62656C6C00          	db `#\\bell\0`
+   429                                  fmt_char_backspace:
+   430 000001D9 235C6261636B737061-     	db `#\\backspace\0`
+   430 000001E2 636500             
+   431                                  fmt_char_tab:
+   432 000001E5 235C74616200            	db `#\\tab\0`
+   433                                  fmt_char_newline:
+   434 000001EB 235C6E65776C696E65-     	db `#\\newline\0`
+   434 000001F4 00                 
+   435                                  fmt_char_formfeed:
+   436 000001F5 235C7061676500          	db `#\\page\0`
+   437                                  fmt_char_return:
+   438 000001FC 235C72657475726E00      	db `#\\return\0`
+   439                                  fmt_char_escape:
+   440 00000205 235C65736300            	db `#\\esc\0`
+   441                                  fmt_char_space:
+   442 0000020B 235C737061636500        	db `#\\space\0`
+   443                                  fmt_char_hex:
+   444 00000213 235C782530325800        	db `#\\x%02X\0`
+   445                                  fmt_gensym:
+   446 0000021B 47256C6400                      db `G%ld\0`
+   447                                  fmt_closure:
+   448 00000220 233C636C6F73757265-     	db `#<closure at 0x%08X env=0x%08X code=0x%08X>\0`
+   448 00000229 206174203078253038-
+   448 00000232 5820656E763D307825-
+   448 0000023B 30385820636F64653D-
+   448 00000244 3078253038583E00   
+   449                                  fmt_lparen:
+   450 0000024C 2800                    	db `(\0`
+   451                                  fmt_dotted_pair:
+   452 0000024E 202E2000                	db ` . \0`
+   453                                  fmt_rparen:
+   454 00000252 2900                    	db `)\0`
+   455                                  fmt_space:
+   456 00000254 2000                    	db ` \0`
+   457                                  fmt_empty_vector:
+   458 00000256 23282900                	db `#()\0`
+   459                                  fmt_vector:
+   460 0000025A 232800                  	db `#(\0`
+   461                                  fmt_real:
+   462 0000025D 256600                  	db `%f\0`
+   463                                  fmt_fraction:
+   464 00000260 256C642F256C6400        	db `%ld/%ld\0`
+   465                                  fmt_zero:
+   466 00000268 3000                    	db `0\0`
+   467                                  fmt_int:
+   468 0000026A 256C6400                	db `%ld\0`
+   469                                  fmt_unknown_scheme_object_error:
+   470 0000026E 0A0A21212120457272-     	db `\n\n!!! Error: Unknown Scheme-object (RTTI 0x%02X) `
+   470 00000277 6F723A20556E6B6E6F-
+   470 00000280 776E20536368656D65-
+   470 00000289 2D6F626A6563742028-
+   470 00000292 525454492030782530-
+   470 0000029B 32582920           
+   471 0000029F 617420616464726573-     	db `at address 0x%08X\n\n\0`
+   471 000002A8 73203078253038580A-
+   471 000002B1 0A00               
+   472                                  fmt_dquote:
+   473 000002B3 2200                    	db `\"\0`
+   474                                  fmt_string_char:
+   475 000002B5 256300                          db `%c\0`
+   476                                  fmt_string_char_7:
+   477 000002B8 5C6100                          db `\\a\0`
+   478                                  fmt_string_char_8:
+   479 000002BB 5C6200                          db `\\b\0`
+   480                                  fmt_string_char_9:
+   481 000002BE 5C7400                          db `\\t\0`
+   482                                  fmt_string_char_10:
+   483 000002C1 5C6E00                          db `\\n\0`
+   484                                  fmt_string_char_11:
+   485 000002C4 5C7600                          db `\\v\0`
+   486                                  fmt_string_char_12:
+   487 000002C7 5C6600                          db `\\f\0`
+   488                                  fmt_string_char_13:
+   489 000002CA 5C7200                          db `\\r\0`
+   490                                  fmt_string_char_34:
+   491 000002CD 5C2200                          db `\\"\0`
+   492                                  fmt_string_char_92:
+   493 000002D0 5C5C00                          db `\\\\\0`
+   494                                  fmt_string_char_hex:
+   495 000002D3 5C7825583B00                    db `\\x%X;\0`
+   496                                  
+   497                                  section .text
+   498                                  
+   499                                  print_sexpr:
+   500 0000040A C8000000                	enter 0, 0
+   501 0000040E 8A07                    	mov al, byte [rdi]
+   502 00000410 3C00                    	cmp al, T_void
+   503 00000412 7465                    	je .Lvoid
+   504 00000414 3C01                    	cmp al, T_nil
+   505 00000416 7470                    	je .Lnil
+   506 00000418 3C09                    	cmp al, T_boolean_false
+   507 0000041A 747B                    	je .Lboolean_false
+   508 0000041C 3C0A                    	cmp al, T_boolean_true
+   509 0000041E 0F8482000000            	je .Lboolean_true
+   510 00000424 3C02                    	cmp al, T_char
+   511 00000426 0F8489000000            	je .Lchar
+   512 0000042C 3C41                    	cmp al, T_interned_symbol
+   513 0000042E 0F84BF010000            	je .Linterned_symbol
+   514 00000434 3C42                            cmp al, T_uninterned_symbol
+   515 00000436 0F84E3010000                    je .Luninterned_symbol
+   516 0000043C 3C21                    	cmp al, T_pair
+   517 0000043E 0F84EE010000            	je .Lpair
+   518 00000444 3C22                    	cmp al, T_vector
+   519 00000446 0F84B7020000            	je .Lvector
+   520 0000044C 3C04                    	cmp al, T_closure
+   521 0000044E 0F8485010000            	je .Lclosure
+   522 00000454 3C13                    	cmp al, T_real
+   523 00000456 0F8448030000            	je .Lreal
+   524 0000045C 3C12                    	cmp al, T_fraction
+   525 0000045E 0F846E030000            	je .Lfraction
+   526 00000464 3C11                    	cmp al, T_integer
+   527 00000466 0F84A7030000            	je .Linteger
+   528 0000046C 3C03                    	cmp al, T_string
+   529 0000046E 0F84B2030000            	je .Lstring
+   530                                  
+   531 00000474 E9DC040000              	jmp .Lunknown_sexpr_type
+   532                                  
+   533                                  .Lvoid:
+   534 00000479 48BF-                   	mov rdi, fmt_void
+   534 0000047B [AE01000000000000] 
+   535 00000483 E900050000              	jmp .Lemit
+   536                                  
+   537                                  .Lnil:
+   538 00000488 48BF-                   	mov rdi, fmt_nil
+   538 0000048A [B601000000000000] 
+   539 00000492 E9F1040000              	jmp .Lemit
+   540                                  
+   541                                  .Lboolean_false:
+   542 00000497 48BF-                   	mov rdi, fmt_boolean_false
+   542 00000499 [B901000000000000] 
+   543 000004A1 E9E2040000              	jmp .Lemit
+   544                                  
+   545                                  .Lboolean_true:
+   546 000004A6 48BF-                   	mov rdi, fmt_boolean_true
+   546 000004A8 [BC01000000000000] 
+   547 000004B0 E9D3040000              	jmp .Lemit
+   548                                  
+   549                                  .Lchar:
+   550 000004B5 8A4701                  	mov al, byte [rdi + 1]
+   551 000004B8 3C20                    	cmp al, ' '
+   552 000004BA 7E20                    	jle .Lchar_whitespace
+   553 000004BC 3C5C                    	cmp al, 92 		; backslash
+   554 000004BE 7474                    	je .Lchar_backslash
+   555 000004C0 3C22                    	cmp al, '"'
+   556 000004C2 747F                    	je .Lchar_dquote
+   557 000004C4 4825FF000000            	and rax, 255
+   558 000004CA 48BF-                   	mov rdi, fmt_char_simple
+   558 000004CC [C701000000000000] 
+   559 000004D4 4889C6                  	mov rsi, rax
+   560 000004D7 E9AC040000              	jmp .Lemit
+   561                                  
+   562                                  .Lchar_whitespace:
+   563 000004DC 3C00                    	cmp al, 0
+   564 000004DE 7472                    	je .Lchar_null
+   565 000004E0 3C07                    	cmp al, 7
+   566 000004E2 747D                    	je .Lchar_bell
+   567 000004E4 3C08                    	cmp al, 8
+   568 000004E6 0F8484000000            	je .Lchar_backspace
+   569 000004EC 3C09                    	cmp al, 9
+   570 000004EE 0F848B000000            	je .Lchar_tab
+   571 000004F4 3C0A                    	cmp al, 10
+   572 000004F6 0F8492000000            	je .Lchar_newline
+   573 000004FC 3C0C                    	cmp al, 12
+   574 000004FE 0F8499000000            	je .Lchar_formfeed
+   575 00000504 3C0D                    	cmp al, 13
+   576 00000506 0F84A0000000            	je .Lchar_return
+   577 0000050C 3C1B                    	cmp al, 27
+   578 0000050E 0F84A7000000            	je .Lchar_escape
+   579 00000514 4825FF000000            	and rax, 255
+   580 0000051A 3C20                    	cmp al, ' '
+   581 0000051C 0F84A8000000            	je .Lchar_space
+   582 00000522 48BF-                   	mov rdi, fmt_char_hex
+   582 00000524 [1302000000000000] 
+   583 0000052C 4889C6                  	mov rsi, rax
+   584 0000052F E954040000              	jmp .Lemit	
+   585                                  
+   586                                  .Lchar_backslash:
+   587 00000534 48BF-                   	mov rdi, fmt_char_backslash
+   587 00000536 [BF01000000000000] 
+   588 0000053E E945040000              	jmp .Lemit
+   589                                  
+   590                                  .Lchar_dquote:
+   591 00000543 48BF-                   	mov rdi, fmt_char_dquote
+   591 00000545 [C301000000000000] 
+   592 0000054D E936040000              	jmp .Lemit
+   593                                  
+   594                                  .Lchar_null:
+   595 00000552 48BF-                   	mov rdi, fmt_char_null
+   595 00000554 [CC01000000000000] 
+   596 0000055C E927040000              	jmp .Lemit
+   597                                  
+   598                                  .Lchar_bell:
+   599 00000561 48BF-                   	mov rdi, fmt_char_bell
+   599 00000563 [D201000000000000] 
+   600 0000056B E918040000              	jmp .Lemit
+   601                                  
+   602                                  .Lchar_backspace:
+   603 00000570 48BF-                   	mov rdi, fmt_char_backspace
+   603 00000572 [D901000000000000] 
+   604 0000057A E909040000              	jmp .Lemit
+   605                                  
+   606                                  .Lchar_tab:
+   607 0000057F 48BF-                   	mov rdi, fmt_char_tab
+   607 00000581 [E501000000000000] 
+   608 00000589 E9FA030000              	jmp .Lemit
+   609                                  
+   610                                  .Lchar_newline:
+   611 0000058E 48BF-                   	mov rdi, fmt_char_newline
+   611 00000590 [EB01000000000000] 
+   612 00000598 E9EB030000              	jmp .Lemit
+   613                                  
+   614                                  .Lchar_formfeed:
+   615 0000059D 48BF-                   	mov rdi, fmt_char_formfeed
+   615 0000059F [F501000000000000] 
+   616 000005A7 E9DC030000              	jmp .Lemit
+   617                                  
+   618                                  .Lchar_return:
+   619 000005AC 48BF-                   	mov rdi, fmt_char_return
+   619 000005AE [FC01000000000000] 
+   620 000005B6 E9CD030000              	jmp .Lemit
+   621                                  
+   622                                  .Lchar_escape:
+   623 000005BB 48BF-                   	mov rdi, fmt_char_escape
+   623 000005BD [0502000000000000] 
+   624 000005C5 E9BE030000              	jmp .Lemit
+   625                                  
+   626                                  .Lchar_space:
+   627 000005CA 48BF-                   	mov rdi, fmt_char_space
+   627 000005CC [0B02000000000000] 
+   628 000005D4 E9AF030000              	jmp .Lemit
+   629                                  
+   630                                  .Lclosure:
+   631 000005D9 4889FE                  	mov rsi, qword rdi
+   632 000005DC 48BF-                   	mov rdi, fmt_closure
+   632 000005DE [2002000000000000] 
+   633 000005E6 488B5601                	mov rdx, SOB_CLOSURE_ENV(rsi)
+   634 000005EA 488B4E09                	mov rcx, SOB_CLOSURE_CODE(rsi)
+   635 000005EE E995030000              	jmp .Lemit
+   636                                  
+   637                                  .Linterned_symbol:
+   638 000005F3 488B7F01                	mov rdi, qword [rdi + 1] ; sob_string
+   639 000005F7 BE01000000              	mov rsi, 1		 ; size = 1 byte
+   640 000005FC 488B5701                	mov rdx, qword [rdi + 1] ; length
+   641 00000600 488D7F09                	lea rdi, [rdi + 1 + 8]	 ; actual characters
+   642 00000604 488B0C25[00000000]      	mov rcx, qword [stdout]	 ; FILE *
+   643                                  	ENTER
+    44 0000060C C8000000            <1>  enter 0, 0
+    45 00000610 4883E4F0            <1>  and rsp, ~15
+   644 00000614 E8(00000000)            	call fwrite
+   645                                  	LEAVE
+    49 00000619 C9                  <1>  leave
+   646 0000061A E97E030000              	jmp .Lend
+   647                                  
+   648                                  .Luninterned_symbol:
+   649 0000061F 488B7701                        mov rsi, qword [rdi + 1] ; gensym counter
+   650 00000623 48BF-                           mov rdi, fmt_gensym
+   650 00000625 [1B02000000000000] 
+   651 0000062D E956030000                      jmp .Lemit
+   652                                  	
+   653                                  .Lpair:
+   654 00000632 57                      	push rdi
+   655 00000633 48BF-                   	mov rdi, fmt_lparen
+   655 00000635 [4C02000000000000] 
+   656 0000063D B800000000              	mov rax, 0
+   657                                          ENTER
+    44 00000642 C8000000            <1>  enter 0, 0
+    45 00000646 4883E4F0            <1>  and rsp, ~15
+   658 0000064A E8(00000000)            	call printf
+   659                                          LEAVE
+    49 0000064F C9                  <1>  leave
+   660 00000650 488B3C24                	mov rdi, qword [rsp] 	; pair
+   661 00000654 488B7F01                	mov rdi, SOB_PAIR_CAR(rdi)
+   662 00000658 E8ADFDFFFF              	call print_sexpr
+   663 0000065D 5F                      	pop rdi 		; pair
+   664 0000065E 488B7F09                	mov rdi, SOB_PAIR_CDR(rdi)
+   665                                  .Lcdr:
+   666 00000662 8A07                    	mov al, byte [rdi]
+   667 00000664 3C01                    	cmp al, T_nil
+   668 00000666 7447                    	je .Lcdr_nil
+   669 00000668 3C21                    	cmp al, T_pair
+   670 0000066A 7462                    	je .Lcdr_pair
+   671 0000066C 57                      	push rdi
+   672 0000066D 48BF-                   	mov rdi, fmt_dotted_pair
+   672 0000066F [4E02000000000000] 
+   673 00000677 B800000000              	mov rax, 0
+   674                                          ENTER
+    44 0000067C C8000000            <1>  enter 0, 0
+    45 00000680 4883E4F0            <1>  and rsp, ~15
+   675 00000684 E8(00000000)            	call printf
+   676                                          LEAVE
+    49 00000689 C9                  <1>  leave
+   677 0000068A 5F                      	pop rdi
+   678 0000068B E87AFDFFFF              	call print_sexpr
+   679 00000690 48BF-                   	mov rdi, fmt_rparen
+   679 00000692 [5202000000000000] 
+   680 0000069A B800000000              	mov rax, 0
+   681                                          ENTER
+    44 0000069F C8000000            <1>  enter 0, 0
+    45 000006A3 4883E4F0            <1>  and rsp, ~15
+   682 000006A7 E8(00000000)            	call printf
+   683                                          LEAVE
+    49 000006AC C9                  <1>  leave
+   684 000006AD C9                      	leave
+   685 000006AE C3                      	ret
+   686                                  
+   687                                  .Lcdr_nil:
+   688 000006AF 48BF-                   	mov rdi, fmt_rparen
+   688 000006B1 [5202000000000000] 
+   689 000006B9 B800000000              	mov rax, 0
+   690                                          ENTER
+    44 000006BE C8000000            <1>  enter 0, 0
+    45 000006C2 4883E4F0            <1>  and rsp, ~15
+   691 000006C6 E8(00000000)            	call printf
+   692                                          LEAVE
+    49 000006CB C9                  <1>  leave
+   693 000006CC C9                      	leave
+   694 000006CD C3                      	ret
+   695                                  
+   696                                  .Lcdr_pair:
+   697 000006CE 57                      	push rdi
+   698 000006CF 48BF-                   	mov rdi, fmt_space
+   698 000006D1 [5402000000000000] 
+   699 000006D9 B800000000              	mov rax, 0
+   700                                          ENTER
+    44 000006DE C8000000            <1>  enter 0, 0
+    45 000006E2 4883E4F0            <1>  and rsp, ~15
+   701 000006E6 E8(00000000)            	call printf
+   702                                          LEAVE
+    49 000006EB C9                  <1>  leave
+   703 000006EC 488B3C24                	mov rdi, qword [rsp]
+   704 000006F0 488B7F01                	mov rdi, SOB_PAIR_CAR(rdi)
+   705 000006F4 E811FDFFFF              	call print_sexpr
+   706 000006F9 5F                      	pop rdi
+   707 000006FA 488B7F09                	mov rdi, SOB_PAIR_CDR(rdi)
+   708 000006FE E95FFFFFFF              	jmp .Lcdr
+   709                                  
+   710                                  .Lvector:
+   711 00000703 488B4701                	mov rax, qword [rdi + 1] ; length
+   712 00000707 4883F800                	cmp rax, 0
+   713 0000070B 0F8484000000            	je .Lvector_empty
+   714 00000711 57                      	push rdi
+   715 00000712 48BF-                   	mov rdi, fmt_vector
+   715 00000714 [5A02000000000000] 
+   716 0000071C B800000000              	mov rax, 0
+   717                                          ENTER
+    44 00000721 C8000000            <1>  enter 0, 0
+    45 00000725 4883E4F0            <1>  and rsp, ~15
+   718 00000729 E8(00000000)            	call printf
+   719                                          LEAVE
+    49 0000072E C9                  <1>  leave
+   720 0000072F 488B3C24                	mov rdi, qword [rsp]
+   721 00000733 FF7701                  	push qword [rdi + 1]
+   722 00000736 6A01                    	push 1
+   723 00000738 488B7F09                	mov rdi, qword [rdi + 1 + 8] ; v[0]
+   724 0000073C E8C9FCFFFF              	call print_sexpr
+   725                                  .Lvector_loop:
+   726                                  	; [rsp] index
+   727                                  	; [rsp + 8*1] limit
+   728                                  	; [rsp + 8*2] vector
+   729 00000741 488B0424                	mov rax, qword [rsp]
+   730 00000745 483B442408              	cmp rax, qword [rsp + 8*1]
+   731 0000074A 7436                    	je .Lvector_end
+   732 0000074C 48BF-                   	mov rdi, fmt_space
+   732 0000074E [5402000000000000] 
+   733 00000756 B800000000              	mov rax, 0
+   734                                          ENTER
+    44 0000075B C8000000            <1>  enter 0, 0
+    45 0000075F 4883E4F0            <1>  and rsp, ~15
+   735 00000763 E8(00000000)            	call printf
+   736                                          LEAVE
+    49 00000768 C9                  <1>  leave
+   737 00000769 488B0424                	mov rax, qword [rsp]
+   738 0000076D 488B5C2410              	mov rbx, qword [rsp + 8*2]
+   739 00000772 488B7CC309              	mov rdi, qword [rbx + 1 + 8 + 8 * rax] ; v[i]
+   740 00000777 E88EFCFFFF              	call print_sexpr
+   741 0000077C 48FF0424                	inc qword [rsp]
+   742 00000780 EBBF                    	jmp .Lvector_loop
+   743                                  
+   744                                  .Lvector_end:
+   745 00000782 4883C418                	add rsp, 8*3
+   746 00000786 48BF-                   	mov rdi, fmt_rparen
+   746 00000788 [5202000000000000] 
+   747 00000790 E9F3010000              	jmp .Lemit	
+   748                                  
+   749                                  .Lvector_empty:
+   750 00000795 48BF-                   	mov rdi, fmt_empty_vector
+   750 00000797 [5602000000000000] 
+   751 0000079F E9E4010000              	jmp .Lemit
+   752                                  
+   753                                  .Lreal:
+   754 000007A4 FF7701                  	push qword [rdi + 1]
+   755 000007A7 F20F100424              	movsd xmm0, qword [rsp]
+   756 000007AC 4883C408                	add rsp, 8*1
+   757 000007B0 48BF-                   	mov rdi, fmt_real
+   757 000007B2 [5D02000000000000] 
+   758 000007BA B801000000              	mov rax, 1
+   759                                  	ENTER
+    44 000007BF C8000000            <1>  enter 0, 0
+    45 000007C3 4883E4F0            <1>  and rsp, ~15
+   760 000007C7 E8(00000000)            	call printf
+   761                                  	LEAVE
+    49 000007CC C9                  <1>  leave
+   762 000007CD E9CB010000              	jmp .Lend
+   763                                  
+   764                                  .Lfraction:
+   765 000007D2 488B7701                	mov rsi, qword [rdi + 1]
+   766 000007D6 488B5709                	mov rdx, qword [rdi + 1 + 8]
+   767 000007DA 4883FE00                	cmp rsi, 0
+   768 000007DE 7415                    	je .Lrat_zero
+   769 000007E0 4883FA01                	cmp rdx, 1
+   770 000007E4 741E                    	je .Lrat_int
+   771 000007E6 48BF-                   	mov rdi, fmt_fraction
+   771 000007E8 [6002000000000000] 
+   772 000007F0 E993010000              	jmp .Lemit
+   773                                  
+   774                                  .Lrat_zero:
+   775 000007F5 48BF-                   	mov rdi, fmt_zero
+   775 000007F7 [6802000000000000] 
+   776 000007FF E984010000              	jmp .Lemit
+   777                                  
+   778                                  .Lrat_int:
+   779 00000804 48BF-                   	mov rdi, fmt_int
+   779 00000806 [6A02000000000000] 
+   780 0000080E E975010000              	jmp .Lemit
+   781                                  
+   782                                  .Linteger:
+   783 00000813 488B7701                	mov rsi, qword [rdi + 1]
+   784 00000817 48BF-                   	mov rdi, fmt_int
+   784 00000819 [6A02000000000000] 
+   785 00000821 E962010000              	jmp .Lemit
+   786                                  
+   787                                  .Lstring:
+   788 00000826 488D4709                	lea rax, [rdi + 1 + 8]
+   789 0000082A 50                      	push rax
+   790 0000082B FF7701                  	push qword [rdi + 1]
+   791 0000082E 48BF-                   	mov rdi, fmt_dquote
+   791 00000830 [B302000000000000] 
+   792 00000838 B800000000              	mov rax, 0
+   793                                  	ENTER
+    44 0000083D C8000000            <1>  enter 0, 0
+    45 00000841 4883E4F0            <1>  and rsp, ~15
+   794 00000845 E8(00000000)            	call printf
+   795                                  	LEAVE
+    49 0000084A C9                  <1>  leave
+   796                                  .Lstring_loop:
+   797                                  	; qword [rsp]: limit
+   798                                  	; qword [rsp + 8*1]: char *
+   799 0000084B 48833C2400              	cmp qword [rsp], 0
+   800 00000850 0F84EF000000            	je .Lstring_end
+   801 00000856 488B442408              	mov rax, qword [rsp + 8*1]
+   802 0000085B 8A00                    	mov al, byte [rax]
+   803 0000085D 4825FF000000            	and rax, 255
+   804 00000863 3C07                    	cmp al, 7
+   805 00000865 745D                            je .Lstring_char_7
+   806 00000867 3C08                            cmp al, 8
+   807 00000869 7465                            je .Lstring_char_8
+   808 0000086B 3C09                            cmp al, 9
+   809 0000086D 746D                            je .Lstring_char_9
+   810 0000086F 3C0A                            cmp al, 10
+   811 00000871 7475                            je .Lstring_char_10
+   812 00000873 3C0B                            cmp al, 11
+   813 00000875 747D                            je .Lstring_char_11
+   814 00000877 3C0C                            cmp al, 12
+   815 00000879 0F8481000000                    je .Lstring_char_12
+   816 0000087F 3C0D                            cmp al, 13
+   817 00000881 0F8485000000                    je .Lstring_char_13
+   818 00000887 3C22                            cmp al, 34
+   819 00000889 0F8489000000                    je .Lstring_char_34
+   820 0000088F 3C5C                            cmp al, 92              ;         je .Lstring_char_92
+   822 00000891 3C20                            cmp al, ' '
+   823 00000893 0F8C9A000000                    jl .Lstring_char_hex
+   824 00000899 48BF-                           mov rdi, fmt_string_char
+   824 0000089B [B502000000000000] 
+   825 000008A3 4889C6                          mov rsi, rax
+   826                                  .Lstring_char_emit:
+   827 000008A6 B800000000                      mov rax, 0
+   828                                          ENTER
+    44 000008AB C8000000            <1>  enter 0, 0
+    45 000008AF 4883E4F0            <1>  and rsp, ~15
+   829 000008B3 E8(00000000)                    call printf
+   830                                          LEAVE
+    49 000008B8 C9                  <1>  leave
+   831 000008B9 48FF0C24                        dec qword [rsp]
+   832 000008BD 48FF442408                      inc qword [rsp + 8*1]
+   833 000008C2 EB87                            jmp .Lstring_loop
+   834                                  
+   835                                  .Lstring_char_7:
+   836 000008C4 48BF-                           mov rdi, fmt_string_char_7
+   836 000008C6 [B802000000000000] 
+   837 000008CE EBD6                            jmp .Lstring_char_emit
+   838                                  
+   839                                  .Lstring_char_8:
+   840 000008D0 48BF-                           mov rdi, fmt_string_char_8
+   840 000008D2 [BB02000000000000] 
+   841 000008DA EBCA                            jmp .Lstring_char_emit
+   842                                          
+   843                                  .Lstring_char_9:
+   844 000008DC 48BF-                           mov rdi, fmt_string_char_9
+   844 000008DE [BE02000000000000] 
+   845 000008E6 EBBE                            jmp .Lstring_char_emit
+   846                                  
+   847                                  .Lstring_char_10:
+   848 000008E8 48BF-                           mov rdi, fmt_string_char_10
+   848 000008EA [C102000000000000] 
+   849 000008F2 EBB2                            jmp .Lstring_char_emit
+   850                                  
+   851                                  .Lstring_char_11:
+   852 000008F4 48BF-                           mov rdi, fmt_string_char_11
+   852 000008F6 [C402000000000000] 
+   853 000008FE EBA6                            jmp .Lstring_char_emit
+   854                                  
+   855                                  .Lstring_char_12:
+   856 00000900 48BF-                           mov rdi, fmt_string_char_12
+   856 00000902 [C702000000000000] 
+   857 0000090A EB9A                            jmp .Lstring_char_emit
+   858                                  
+   859                                  .Lstring_char_13:
+   860 0000090C 48BF-                           mov rdi, fmt_string_char_13
+   860 0000090E [CA02000000000000] 
+   861 00000916 EB8E                            jmp .Lstring_char_emit
+   862                                  
+   863                                  .Lstring_char_34:
+   864 00000918 48BF-                           mov rdi, fmt_string_char_34
+   864 0000091A [CD02000000000000] 
+   865 00000922 EB82                            jmp .Lstring_char_emit
+   866                                  
+   867                                  .Lstring_char_92:
+   868 00000924 48BF-                           mov rdi, fmt_string_char_92
+   868 00000926 [D002000000000000] 
+   869 0000092E E973FFFFFF                      jmp .Lstring_char_emit
+   870                                  
+   871                                  .Lstring_char_hex:
+   872 00000933 48BF-                           mov rdi, fmt_string_char_hex
+   872 00000935 [D302000000000000] 
+   873 0000093D 4889C6                          mov rsi, rax
+   874 00000940 E961FFFFFF                      jmp .Lstring_char_emit        
+   875                                  
+   876                                  .Lstring_end:
+   877 00000945 4883C410                	add rsp, 8 * 2
+   878 00000949 48BF-                   	mov rdi, fmt_dquote
+   878 0000094B [B302000000000000] 
+   879 00000953 EB33                    	jmp .Lemit
+   880                                  
+   881                                  .Lunknown_sexpr_type:
+   882 00000955 48BE-                   	mov rsi, fmt_unknown_scheme_object_error
+   882 00000957 [6E02000000000000] 
+   883 0000095F 4825FF000000            	and rax, 255
+   884 00000965 4889C2                  	mov rdx, rax
+   885 00000968 4889F9                  	mov rcx, rdi
+   886 0000096B 488B3C25[00000000]      	mov rdi, qword [stderr]
+   887 00000973 B800000000              	mov rax, 0
+   888                                          ENTER
+    44 00000978 C8000000            <1>  enter 0, 0
+    45 0000097C 4883E4F0            <1>  and rsp, ~15
+   889 00000980 E8(00000000)            	call fprintf
+   890                                          LEAVE
+    49 00000985 C9                  <1>  leave
+   891 00000986 C9                              leave
+   892 00000987 C3                              ret
+   893                                  
+   894                                  .Lemit:
+   895 00000988 B800000000              	mov rax, 0
+   896                                          ENTER
+    44 0000098D C8000000            <1>  enter 0, 0
+    45 00000991 4883E4F0            <1>  and rsp, ~15
+   897 00000995 E8(00000000)            	call printf
+   898                                          LEAVE
+    49 0000099A C9                  <1>  leave
+   899 0000099B EB00                    	jmp .Lend
+   900                                  
+   901                                  .Lend:
+   902                                  	LEAVE
+    49 0000099D C9                  <1>  leave
+   903 0000099E C3                      	ret
+   904                                  
+   905                                  ;;; rdi: address of free variable
+   906                                  ;;; rsi: address of code-pointer
+   907                                  bind_primitive:
+   908 0000099F C8000000                        enter 0, 0
+   909 000009A3 57                              push rdi
+   910 000009A4 BF11000000                      mov rdi, (1 + 8 + 8)
+   911 000009A9 E8DBF7FFFF                      call malloc
+   912 000009AE 5F                              pop rdi
+   913 000009AF C60004                          mov byte [rax], T_closure
+   914 000009B2 48C7400100000000                mov SOB_CLOSURE_ENV(rax), 0 ; dummy, lexical environment
+   915 000009BA 48897009                        mov SOB_CLOSURE_CODE(rax), rsi ; code pointer
+   916 000009BE 488907                          mov qword [rdi], rax
+   917 000009C1 48B8-                           mov rax, sob_void
+   917 000009C3 [0000000000000000] 
+   918 000009CB C9                              leave
+   919 000009CC C3                              ret
+   920                                  
+   921                                  L_code_ptr_ash:
+   922 000009CD C8000000                        enter 0, 0
+   923 000009D1 48837D1802                      cmp COUNT, 2
+   924 000009D6 0F8510140000                    jne L_error_arg_count_2
+   925 000009DC 488B7D20                        mov rdi, PARAM(0)
+   926                                          assert_integer(rdi)
+    53 000009E0 803F11              <1>  cmp byte [%1], %2
+    54 000009E3 0F85A2140000        <1>  jne L_error_incorrect_type
+   927 000009E9 488B4D28                        mov rcx, PARAM(1)
+   928                                          assert_integer(rcx)
+    53 000009ED 803911              <1>  cmp byte [%1], %2
+    54 000009F0 0F8595140000        <1>  jne L_error_incorrect_type
+   929 000009F6 488B7F01                        mov rdi, qword [rdi + 1]
+   930 000009FA 488B4901                        mov rcx, qword [rcx + 1]
+   931 000009FE 4883F900                        cmp rcx, 0
+   932 00000A02 7C0F                            jl .L_negative
+   933                                  .L_loop_positive:
+   934 00000A04 4883F900                        cmp rcx, 0
+   935 00000A08 741B                            je .L_exit
+   936 00000A0A 48D3E7                          sal rdi, cl
+   937 00000A0D 48C1E908                        shr rcx, 8
+   938 00000A11 EBF1                            jmp .L_loop_positive
+   939                                  .L_negative:
+   940 00000A13 48F7D9                          neg rcx
+   941                                  .L_loop_negative:
+   942 00000A16 4883F900                        cmp rcx, 0
+   943 00000A1A 7409                            je .L_exit
+   944 00000A1C 48D3FF                          sar rdi, cl
+   945 00000A1F 48C1E908                        shr rcx, 8
+   946 00000A23 EBF1                            jmp .L_loop_negative
+   947                                  .L_exit:
+   948 00000A25 E8DC120000                      call make_integer
+   949 00000A2A C9                              leave
+   950 00000A2B C22000                          ret AND_KILL_FRAME(2)
+   951                                  
+   952                                  L_code_ptr_logand:
+   953 00000A2E C8000000                        enter 0, 0
+   954 00000A32 48837D1802                      cmp COUNT, 2
+   955 00000A37 0F85AF130000                    jne L_error_arg_count_2
+   956 00000A3D 4C8B4520                        mov r8, PARAM(0)
+   957                                          assert_integer(r8)
+    53 00000A41 41803811            <1>  cmp byte [%1], %2
+    54 00000A45 0F8540140000        <1>  jne L_error_incorrect_type
+   958 00000A4B 4C8B4D28                        mov r9, PARAM(1)
+   959                                          assert_integer(r9)
+    53 00000A4F 41803911            <1>  cmp byte [%1], %2
+    54 00000A53 0F8532140000        <1>  jne L_error_incorrect_type
+   960 00000A59 498B7801                        mov rdi, qword [r8 + 1]
+   961 00000A5D 49237901                        and rdi, qword [r9 + 1]
+   962 00000A61 E8A0120000                      call make_integer
+   963 00000A66 C9                              leave
+   964 00000A67 C22000                          ret AND_KILL_FRAME(2)
+   965                                  
+   966                                  L_code_ptr_logor:
+   967 00000A6A C8000000                        enter 0, 0
+   968 00000A6E 48837D1802                      cmp COUNT, 2
+   969 00000A73 0F8573130000                    jne L_error_arg_count_2
+   970 00000A79 4C8B4520                        mov r8, PARAM(0)
+   971                                          assert_integer(r8)
+    53 00000A7D 41803811            <1>  cmp byte [%1], %2
+    54 00000A81 0F8504140000        <1>  jne L_error_incorrect_type
+   972 00000A87 4C8B4D28                        mov r9, PARAM(1)
+   973                                          assert_integer(r9)
+    53 00000A8B 41803911            <1>  cmp byte [%1], %2
+    54 00000A8F 0F85F6130000        <1>  jne L_error_incorrect_type
+   974 00000A95 498B7801                        mov rdi, qword [r8 + 1]
+   975 00000A99 490B7901                        or rdi, qword [r9 + 1]
+   976 00000A9D E864120000                      call make_integer
+   977 00000AA2 C9                              leave
+   978 00000AA3 C22000                          ret AND_KILL_FRAME(2)
+   979                                  
+   980                                  L_code_ptr_logxor:
+   981 00000AA6 C8000000                        enter 0, 0
+   982 00000AAA 48837D1802                      cmp COUNT, 2
+   983 00000AAF 0F8537130000                    jne L_error_arg_count_2
+   984 00000AB5 4C8B4520                        mov r8, PARAM(0)
+   985                                          assert_integer(r8)
+    53 00000AB9 41803811            <1>  cmp byte [%1], %2
+    54 00000ABD 0F85C8130000        <1>  jne L_error_incorrect_type
+   986 00000AC3 4C8B4D28                        mov r9, PARAM(1)
+   987                                          assert_integer(r9)
+    53 00000AC7 41803911            <1>  cmp byte [%1], %2
+    54 00000ACB 0F85BA130000        <1>  jne L_error_incorrect_type
+   988 00000AD1 498B7801                        mov rdi, qword [r8 + 1]
+   989 00000AD5 49337901                        xor rdi, qword [r9 + 1]
+   990 00000AD9 E828120000                      call make_integer
+   991                                          LEAVE
+    49 00000ADE C9                  <1>  leave
+   992 00000ADF C22000                          ret AND_KILL_FRAME(2)
+   993                                  
+   994                                  L_code_ptr_lognot:
+   995 00000AE2 C8000000                        enter 0, 0
+   996 00000AE6 48837D1801                      cmp COUNT, 1
+   997 00000AEB 0F85C6120000                    jne L_error_arg_count_1
+   998 00000AF1 4C8B4520                        mov r8, PARAM(0)
+   999                                          assert_integer(r8)
+    53 00000AF5 41803811            <1>  cmp byte [%1], %2
+    54 00000AF9 0F858C130000        <1>  jne L_error_incorrect_type
+  1000 00000AFF 498B7801                        mov rdi, qword [r8 + 1]
+  1001 00000B03 48F7D7                          not rdi
+  1002 00000B06 E8FB110000                      call make_integer
+  1003 00000B0B C9                              leave
+  1004 00000B0C C21800                          ret AND_KILL_FRAME(1)
+  1005                                  
+  1006                                  L_code_ptr_bin_apply:
+  1007                                  ;;; fill in for final project!
+  1008                                  
+  1009                                  L_code_ptr_is_null:
+  1010 00000B0F C8000000                        enter 0, 0
+  1011 00000B13 48837D1801                      cmp COUNT, 1
+  1012 00000B18 0F8599120000                    jne L_error_arg_count_1
+  1013 00000B1E 488B4520                        mov rax, PARAM(0)
+  1014 00000B22 803801                          cmp byte [rax], T_nil
+  1015 00000B25 750C                            jne .L_false
+  1016 00000B27 48B8-                           mov rax, sob_boolean_true
+  1016 00000B29 [0300000000000000] 
+  1017 00000B31 EB0A                            jmp .L_end
+  1018                                  .L_false:
+  1019 00000B33 48B8-                           mov rax, sob_boolean_false
+  1019 00000B35 [0200000000000000] 
+  1020                                  .L_end:
+  1021 00000B3D C9                              leave
+  1022 00000B3E C21800                          ret AND_KILL_FRAME(1)
+  1023                                  
+  1024                                  L_code_ptr_is_pair:
+  1025 00000B41 C8000000                        enter 0, 0
+  1026 00000B45 48837D1801                      cmp COUNT, 1
+  1027 00000B4A 0F8567120000                    jne L_error_arg_count_1
+  1028 00000B50 488B4520                        mov rax, PARAM(0)
+  1029 00000B54 803821                          cmp byte [rax], T_pair
+  1030 00000B57 750C                            jne .L_false
+  1031 00000B59 48B8-                           mov rax, sob_boolean_true
+  1031 00000B5B [0300000000000000] 
+  1032 00000B63 EB0A                            jmp .L_end
+  1033                                  .L_false:
+  1034 00000B65 48B8-                           mov rax, sob_boolean_false
+  1034 00000B67 [0200000000000000] 
+  1035                                  .L_end:
+  1036 00000B6F C9                              leave
+  1037 00000B70 C21800                          ret AND_KILL_FRAME(1)
+  1038                                          
+  1039                                  L_code_ptr_is_void:
+  1040 00000B73 C8000000                        enter 0, 0
+  1041 00000B77 48837D1801                      cmp COUNT, 1
+  1042 00000B7C 0F8535120000                    jne L_error_arg_count_1
+  1043 00000B82 488B4520                        mov rax, PARAM(0)
+  1044 00000B86 803800                          cmp byte [rax], T_void
+  1045 00000B89 750C                            jne .L_false
+  1046 00000B8B 48B8-                           mov rax, sob_boolean_true
+  1046 00000B8D [0300000000000000] 
+  1047 00000B95 EB0A                            jmp .L_end
+  1048                                  .L_false:
+  1049 00000B97 48B8-                           mov rax, sob_boolean_false
+  1049 00000B99 [0200000000000000] 
+  1050                                  .L_end:
+  1051 00000BA1 C9                              leave
+  1052 00000BA2 C21800                          ret AND_KILL_FRAME(1)
+  1053                                  
+  1054                                  L_code_ptr_is_char:
+  1055 00000BA5 C8000000                        enter 0, 0
+  1056 00000BA9 48837D1801                      cmp COUNT, 1
+  1057 00000BAE 0F8503120000                    jne L_error_arg_count_1
+  1058 00000BB4 488B4520                        mov rax, PARAM(0)
+  1059 00000BB8 803802                          cmp byte [rax], T_char
+  1060 00000BBB 750C                            jne .L_false
+  1061 00000BBD 48B8-                           mov rax, sob_boolean_true
+  1061 00000BBF [0300000000000000] 
+  1062 00000BC7 EB0A                            jmp .L_end
+  1063                                  .L_false:
+  1064 00000BC9 48B8-                           mov rax, sob_boolean_false
+  1064 00000BCB [0200000000000000] 
+  1065                                  .L_end:
+  1066 00000BD3 C9                              leave
+  1067 00000BD4 C21800                          ret AND_KILL_FRAME(1)
+  1068                                  
+  1069                                  L_code_ptr_is_string:
+  1070 00000BD7 C8000000                        enter 0, 0
+  1071 00000BDB 48837D1801                      cmp COUNT, 1
+  1072 00000BE0 0F85D1110000                    jne L_error_arg_count_1
+  1073 00000BE6 488B4520                        mov rax, PARAM(0)
+  1074 00000BEA 803803                          cmp byte [rax], T_string
+  1075 00000BED 750C                            jne .L_false
+  1076 00000BEF 48B8-                           mov rax, sob_boolean_true
+  1076 00000BF1 [0300000000000000] 
+  1077 00000BF9 EB0A                            jmp .L_end
+  1078                                  .L_false:
+  1079 00000BFB 48B8-                           mov rax, sob_boolean_false
+  1079 00000BFD [0200000000000000] 
+  1080                                  .L_end:
+  1081 00000C05 C9                              leave
+  1082 00000C06 C21800                          ret AND_KILL_FRAME(1)
+  1083                                  
+  1084                                  L_code_ptr_is_symbol:
+  1085 00000C09 C8000000                        enter 0, 0
+  1086 00000C0D 48837D1801                      cmp COUNT, 1
+  1087 00000C12 0F859F110000                    jne L_error_arg_count_1
+  1088 00000C18 4C8B4520                        mov r8, PARAM(0)
+  1089 00000C1C 41802040                        and byte [r8], T_symbol
+  1090 00000C20 740C                            jz .L_false
+  1091 00000C22 48B8-                           mov rax, sob_boolean_true
+  1091 00000C24 [0300000000000000] 
+  1092 00000C2C EB0A                            jmp .L_exit
+  1093                                  .L_false:
+  1094 00000C2E 48B8-                           mov rax, sob_boolean_false
+  1094 00000C30 [0200000000000000] 
+  1095                                  .L_exit:
+  1096 00000C38 C9                              leave
+  1097 00000C39 C21800                          ret AND_KILL_FRAME(1)
+  1098                                  
+  1099                                  L_code_ptr_is_uninterned_symbol:
+  1100 00000C3C C8000000                        enter 0, 0
+  1101 00000C40 48837D1801                      cmp COUNT, 1
+  1102 00000C45 0F856C110000                    jne L_error_arg_count_1
+  1103 00000C4B 4C8B4520                        mov r8, PARAM(0)
+  1104 00000C4F 41803842                        cmp byte [r8], T_uninterned_symbol
+  1105 00000C53 750C                            jne .L_false
+  1106 00000C55 48B8-                           mov rax, sob_boolean_true
+  1106 00000C57 [0300000000000000] 
+  1107 00000C5F EB0A                            jmp .L_exit
+  1108                                  .L_false:
+  1109 00000C61 48B8-                           mov rax, sob_boolean_false
+  1109 00000C63 [0200000000000000] 
+  1110                                  .L_exit:
+  1111 00000C6B C9                              leave
+  1112 00000C6C C21800                          ret AND_KILL_FRAME(1)
+  1113                                  
+  1114                                  L_code_ptr_is_interned_symbol:
+  1115 00000C6F C8000000                        enter 0, 0
+  1116 00000C73 48837D1801                      cmp COUNT, 1
+  1117 00000C78 0F8539110000                    jne L_error_arg_count_1
+  1118 00000C7E 488B4520                        mov rax, PARAM(0)
+  1119 00000C82 803841                          cmp byte [rax], T_interned_symbol
+  1120 00000C85 750C                            jne .L_false
+  1121 00000C87 48B8-                           mov rax, sob_boolean_true
+  1121 00000C89 [0300000000000000] 
+  1122 00000C91 EB0A                            jmp .L_end
+  1123                                  .L_false:
+  1124 00000C93 48B8-                           mov rax, sob_boolean_false
+  1124 00000C95 [0200000000000000] 
+  1125                                  .L_end:
+  1126 00000C9D C9                              leave
+  1127 00000C9E C21800                          ret AND_KILL_FRAME(1)
+  1128                                  
+  1129                                  L_code_ptr_gensym:
+  1130 00000CA1 C8000000                        enter 0, 0
+  1131 00000CA5 48837D1800                      cmp COUNT, 0
+  1132 00000CAA 0F85D2100000                    jne L_error_arg_count_0
+  1133 00000CB0 48FF0425[D9020000]              inc qword [gensym_count]
+  1134 00000CB8 BF09000000                      mov rdi, (1 + 8)
+  1135 00000CBD E8C7F4FFFF                      call malloc
+  1136 00000CC2 C60042                          mov byte [rax], T_uninterned_symbol
+  1137 00000CC5 488B0C25[D9020000]              mov rcx, qword [gensym_count]
+  1138 00000CCD 48894801                        mov qword [rax + 1], rcx
+  1139 00000CD1 C9                              leave
+  1140 00000CD2 C21000                          ret AND_KILL_FRAME(0)
+  1141                                  
+  1142                                  L_code_ptr_is_vector:
+  1143 00000CD5 C8000000                        enter 0, 0
+  1144 00000CD9 48837D1801                      cmp COUNT, 1
+  1145 00000CDE 0F85D3100000                    jne L_error_arg_count_1
+  1146 00000CE4 488B4520                        mov rax, PARAM(0)
+  1147 00000CE8 803822                          cmp byte [rax], T_vector
+  1148 00000CEB 750C                            jne .L_false
+  1149 00000CED 48B8-                           mov rax, sob_boolean_true
+  1149 00000CEF [0300000000000000] 
+  1150 00000CF7 EB0A                            jmp .L_end
+  1151                                  .L_false:
+  1152 00000CF9 48B8-                           mov rax, sob_boolean_false
+  1152 00000CFB [0200000000000000] 
+  1153                                  .L_end:
+  1154 00000D03 C9                              leave
+  1155 00000D04 C21800                          ret AND_KILL_FRAME(1)
+  1156                                  
+  1157                                  L_code_ptr_is_closure:
+  1158 00000D07 C8000000                        enter 0, 0
+  1159 00000D0B 48837D1801                      cmp COUNT, 1
+  1160 00000D10 0F85A1100000                    jne L_error_arg_count_1
+  1161 00000D16 488B4520                        mov rax, PARAM(0)
+  1162 00000D1A 803804                          cmp byte [rax], T_closure
+  1163 00000D1D 750C                            jne .L_false
+  1164 00000D1F 48B8-                           mov rax, sob_boolean_true
+  1164 00000D21 [0300000000000000] 
+  1165 00000D29 EB0A                            jmp .L_end
+  1166                                  .L_false:
+  1167 00000D2B 48B8-                           mov rax, sob_boolean_false
+  1167 00000D2D [0200000000000000] 
+  1168                                  .L_end:
+  1169 00000D35 C9                              leave
+  1170 00000D36 C21800                          ret AND_KILL_FRAME(1)
+  1171                                  
+  1172                                  L_code_ptr_is_real:
+  1173 00000D39 C8000000                        enter 0, 0
+  1174 00000D3D 48837D1801                      cmp COUNT, 1
+  1175 00000D42 0F856F100000                    jne L_error_arg_count_1
+  1176 00000D48 488B4520                        mov rax, PARAM(0)
+  1177 00000D4C 803813                          cmp byte [rax], T_real
+  1178 00000D4F 750C                            jne .L_false
+  1179 00000D51 48B8-                           mov rax, sob_boolean_true
+  1179 00000D53 [0300000000000000] 
+  1180 00000D5B EB0A                            jmp .L_end
+  1181                                  .L_false:
+  1182 00000D5D 48B8-                           mov rax, sob_boolean_false
+  1182 00000D5F [0200000000000000] 
+  1183                                  .L_end:
+  1184 00000D67 C9                              leave
+  1185 00000D68 C21800                          ret AND_KILL_FRAME(1)
+  1186                                  
+  1187                                  L_code_ptr_is_fraction:
+  1188 00000D6B C8000000                        enter 0, 0
+  1189 00000D6F 48837D1801                      cmp COUNT, 1
+  1190 00000D74 0F853D100000                    jne L_error_arg_count_1
+  1191 00000D7A 488B4520                        mov rax, PARAM(0)
+  1192 00000D7E 803812                          cmp byte [rax], T_fraction
+  1193 00000D81 750C                            jne .L_false
+  1194 00000D83 48B8-                           mov rax, sob_boolean_true
+  1194 00000D85 [0300000000000000] 
+  1195 00000D8D EB0A                            jmp .L_end
+  1196                                  .L_false:
+  1197 00000D8F 48B8-                           mov rax, sob_boolean_false
+  1197 00000D91 [0200000000000000] 
+  1198                                  .L_end:
+  1199 00000D99 C9                              leave
+  1200 00000D9A C21800                          ret AND_KILL_FRAME(1)
+  1201                                  
+  1202                                  L_code_ptr_is_boolean:
+  1203 00000D9D C8000000                        enter 0, 0
+  1204 00000DA1 48837D1801                      cmp COUNT, 1
+  1205 00000DA6 0F850B100000                    jne L_error_arg_count_1
+  1206 00000DAC 488B4520                        mov rax, PARAM(0)
+  1207 00000DB0 8A18                            mov bl, byte [rax]
+  1208 00000DB2 80E308                          and bl, T_boolean
+  1209 00000DB5 740C                            je .L_false
+  1210 00000DB7 48B8-                           mov rax, sob_boolean_true
+  1210 00000DB9 [0300000000000000] 
+  1211 00000DC1 EB0A                            jmp .L_end
+  1212                                  .L_false:
+  1213 00000DC3 48B8-                           mov rax, sob_boolean_false
+  1213 00000DC5 [0200000000000000] 
+  1214                                  .L_end:
+  1215 00000DCD C9                              leave
+  1216 00000DCE C21800                          ret AND_KILL_FRAME(1)
+  1217                                          
+  1218                                  L_code_ptr_is_boolean_false:
+  1219 00000DD1 C8000000                        enter 0, 0
+  1220 00000DD5 48837D1801                      cmp COUNT, 1
+  1221 00000DDA 0F85D70F0000                    jne L_error_arg_count_1
+  1222 00000DE0 488B4520                        mov rax, PARAM(0)
+  1223 00000DE4 8A18                            mov bl, byte [rax]
+  1224 00000DE6 80FB09                          cmp bl, T_boolean_false
+  1225 00000DE9 750C                            jne .L_false
+  1226 00000DEB 48B8-                           mov rax, sob_boolean_true
+  1226 00000DED [0300000000000000] 
+  1227 00000DF5 EB0A                            jmp .L_end
+  1228                                  .L_false:
+  1229 00000DF7 48B8-                           mov rax, sob_boolean_false
+  1229 00000DF9 [0200000000000000] 
+  1230                                  .L_end:
+  1231 00000E01 C9                              leave
+  1232 00000E02 C21800                          ret AND_KILL_FRAME(1)
+  1233                                  
+  1234                                  L_code_ptr_is_boolean_true:
+  1235 00000E05 C8000000                        enter 0, 0
+  1236 00000E09 48837D1801                      cmp COUNT, 1
+  1237 00000E0E 0F85A30F0000                    jne L_error_arg_count_1
+  1238 00000E14 488B4520                        mov rax, PARAM(0)
+  1239 00000E18 8A18                            mov bl, byte [rax]
+  1240 00000E1A 80FB0A                          cmp bl, T_boolean_true
+  1241 00000E1D 750C                            jne .L_false
+  1242 00000E1F 48B8-                           mov rax, sob_boolean_true
+  1242 00000E21 [0300000000000000] 
+  1243 00000E29 EB0A                            jmp .L_end
+  1244                                  .L_false:
+  1245 00000E2B 48B8-                           mov rax, sob_boolean_false
+  1245 00000E2D [0200000000000000] 
+  1246                                  .L_end:
+  1247 00000E35 C9                              leave
+  1248 00000E36 C21800                          ret AND_KILL_FRAME(1)
+  1249                                  
+  1250                                  L_code_ptr_is_number:
+  1251 00000E39 C8000000                        enter 0, 0
+  1252 00000E3D 48837D1801                      cmp COUNT, 1
+  1253 00000E42 0F856F0F0000                    jne L_error_arg_count_1
+  1254 00000E48 488B4520                        mov rax, PARAM(0)
+  1255 00000E4C 8A18                            mov bl, byte [rax]
+  1256 00000E4E 80E310                          and bl, T_number
+  1257 00000E51 740C                            jz .L_false
+  1258 00000E53 48B8-                           mov rax, sob_boolean_true
+  1258 00000E55 [0300000000000000] 
+  1259 00000E5D EB0A                            jmp .L_end
+  1260                                  .L_false:
+  1261 00000E5F 48B8-                           mov rax, sob_boolean_false
+  1261 00000E61 [0200000000000000] 
+  1262                                  .L_end:
+  1263 00000E69 C9                              leave
+  1264 00000E6A C21800                          ret AND_KILL_FRAME(1)
+  1265                                          
+  1266                                  L_code_ptr_is_collection:
+  1267 00000E6D C8000000                        enter 0, 0
+  1268 00000E71 48837D1801                      cmp COUNT, 1
+  1269 00000E76 0F853B0F0000                    jne L_error_arg_count_1
+  1270 00000E7C 488B4520                        mov rax, PARAM(0)
+  1271 00000E80 8A18                            mov bl, byte [rax]
+  1272 00000E82 80E320                          and bl, T_collection
+  1273 00000E85 740C                            je .L_false
+  1274 00000E87 48B8-                           mov rax, sob_boolean_true
+  1274 00000E89 [0300000000000000] 
+  1275 00000E91 EB0A                            jmp .L_end
+  1276                                  .L_false:
+  1277 00000E93 48B8-                           mov rax, sob_boolean_false
+  1277 00000E95 [0200000000000000] 
+  1278                                  .L_end:
+  1279 00000E9D C9                              leave
+  1280 00000E9E C21800                          ret AND_KILL_FRAME(1)
+  1281                                  
+  1282                                  L_code_ptr_cons:
+  1283 00000EA1 C8000000                        enter 0, 0
+  1284 00000EA5 48837D1802                      cmp COUNT, 2
+  1285 00000EAA 0F853C0F0000                    jne L_error_arg_count_2
+  1286 00000EB0 BF11000000                      mov rdi, (1 + 8 + 8)
+  1287 00000EB5 E8CFF2FFFF                      call malloc
+  1288 00000EBA C60021                          mov byte [rax], T_pair
+  1289 00000EBD 488B5D20                        mov rbx, PARAM(0)
+  1290 00000EC1 48895801                        mov SOB_PAIR_CAR(rax), rbx
+  1291 00000EC5 488B5D28                        mov rbx, PARAM(1)
+  1292 00000EC9 48895809                        mov SOB_PAIR_CDR(rax), rbx
+  1293 00000ECD C9                              leave
+  1294 00000ECE C22000                          ret AND_KILL_FRAME(2)
+  1295                                  
+  1296                                  L_code_ptr_display_sexpr:
+  1297 00000ED1 C8000000                        enter 0, 0
+  1298 00000ED5 48837D1801                      cmp COUNT, 1
+  1299 00000EDA 0F85D70E0000                    jne L_error_arg_count_1
+  1300 00000EE0 488B7D20                        mov rdi, PARAM(0)
+  1301 00000EE4 E821F5FFFF                      call print_sexpr
+  1302 00000EE9 48B8-                           mov rax, sob_void
+  1302 00000EEB [0000000000000000] 
+  1303 00000EF3 C9                              leave
+  1304 00000EF4 C21800                          ret AND_KILL_FRAME(1)
+  1305                                  
+  1306                                  L_code_ptr_write_char:
+  1307 00000EF7 C8000000                        enter 0, 0
+  1308 00000EFB 48837D1801                      cmp COUNT, 1
+  1309 00000F00 0F85B10E0000                    jne L_error_arg_count_1
+  1310 00000F06 488B4520                        mov rax, PARAM(0)
+  1311                                          assert_char(rax)
+    53 00000F0A 803802              <1>  cmp byte [%1], %2
+    54 00000F0D 0F85780F0000        <1>  jne L_error_incorrect_type
+  1312 00000F13 8A4001                          mov al, SOB_CHAR_VALUE(rax)
+  1313 00000F16 4825FF000000                    and rax, 255
+  1314 00000F1C 48BF-                           mov rdi, fmt_char
+  1314 00000F1E [E102000000000000] 
+  1315 00000F26 4889C6                          mov rsi, rax
+  1316 00000F29 B800000000                      mov rax, 0
+  1317                                          ENTER
+    44 00000F2E C8000000            <1>  enter 0, 0
+    45 00000F32 4883E4F0            <1>  and rsp, ~15
+  1318 00000F36 E8(00000000)                    call printf
+  1319                                          LEAVE
+    49 00000F3B C9                  <1>  leave
+  1320 00000F3C 48B8-                           mov rax, sob_void
+  1320 00000F3E [0000000000000000] 
+  1321 00000F46 C9                              leave
+  1322 00000F47 C21800                          ret AND_KILL_FRAME(1)
+  1323                                  
+  1324                                  L_code_ptr_car:
+  1325 00000F4A C8000000                        enter 0, 0
+  1326 00000F4E 48837D1801                      cmp COUNT, 1
+  1327 00000F53 0F855E0E0000                    jne L_error_arg_count_1
+  1328 00000F59 488B4520                        mov rax, PARAM(0)
+  1329                                          assert_pair(rax)
+    53 00000F5D 803821              <1>  cmp byte [%1], %2
+    54 00000F60 0F85250F0000        <1>  jne L_error_incorrect_type
+  1330 00000F66 488B4001                        mov rax, SOB_PAIR_CAR(rax)
+  1331 00000F6A C9                              leave
+  1332 00000F6B C21800                          ret AND_KILL_FRAME(1)
+  1333                                          
+  1334                                  L_code_ptr_cdr:
+  1335 00000F6E C8000000                        enter 0, 0
+  1336 00000F72 48837D1801                      cmp COUNT, 1
+  1337 00000F77 0F853A0E0000                    jne L_error_arg_count_1
+  1338 00000F7D 488B4520                        mov rax, PARAM(0)
+  1339                                          assert_pair(rax)
+    53 00000F81 803821              <1>  cmp byte [%1], %2
+    54 00000F84 0F85010F0000        <1>  jne L_error_incorrect_type
+  1340 00000F8A 488B4009                        mov rax, SOB_PAIR_CDR(rax)
+  1341 00000F8E C9                              leave
+  1342 00000F8F C21800                          ret AND_KILL_FRAME(1)
+  1343                                          
+  1344                                  L_code_ptr_string_length:
+  1345 00000F92 C8000000                        enter 0, 0
+  1346 00000F96 48837D1801                      cmp COUNT, 1
+  1347 00000F9B 0F85160E0000                    jne L_error_arg_count_1
+  1348 00000FA1 488B4520                        mov rax, PARAM(0)
+  1349                                          assert_string(rax)
+    53 00000FA5 803803              <1>  cmp byte [%1], %2
+    54 00000FA8 0F85DD0E0000        <1>  jne L_error_incorrect_type
+  1350 00000FAE 488B7801                        mov rdi, SOB_STRING_LENGTH(rax)
+  1351 00000FB2 E84F0D0000                      call make_integer
+  1352 00000FB7 C9                              leave
+  1353 00000FB8 C21800                          ret AND_KILL_FRAME(1)
+  1354                                  
+  1355                                  L_code_ptr_vector_length:
+  1356 00000FBB C8000000                        enter 0, 0
+  1357 00000FBF 48837D1801                      cmp COUNT, 1
+  1358 00000FC4 0F85ED0D0000                    jne L_error_arg_count_1
+  1359 00000FCA 488B4520                        mov rax, PARAM(0)
+  1360                                          assert_vector(rax)
+    53 00000FCE 803822              <1>  cmp byte [%1], %2
+    54 00000FD1 0F85B40E0000        <1>  jne L_error_incorrect_type
+  1361 00000FD7 488B7801                        mov rdi, SOB_VECTOR_LENGTH(rax)
+  1362 00000FDB E8260D0000                      call make_integer
+  1363 00000FE0 C9                              leave
+  1364 00000FE1 C21800                          ret AND_KILL_FRAME(1)
+  1365                                  
+  1366                                  L_code_ptr_real_to_integer:
+  1367 00000FE4 C8000000                        enter 0, 0
+  1368 00000FE8 48837D1801                      cmp COUNT, 1
+  1369 00000FED 0F85C40D0000                    jne L_error_arg_count_1
+  1370 00000FF3 488B5D20                        mov rbx, PARAM(0)
+  1371                                          assert_real(rbx)
+    53 00000FF7 803B13              <1>  cmp byte [%1], %2
+    54 00000FFA 0F858B0E0000        <1>  jne L_error_incorrect_type
+  1372 00001000 F20F104301                      movsd xmm0, qword [rbx + 1]
+  1373 00001005 F2480F2CF8                      cvttsd2si rdi, xmm0
+  1374 0000100A E8F70C0000                      call make_integer
+  1375 0000100F C9                              leave
+  1376 00001010 C21800                          ret AND_KILL_FRAME(1)
+  1377                                  
+  1378                                  L_code_ptr_exit:
+  1379 00001013 C8000000                        enter 0, 0
+  1380 00001017 48837D1800                      cmp COUNT, 0
+  1381 0000101C 0F85600D0000                    jne L_error_arg_count_0
+  1382 00001022 B800000000                      mov rax, 0
+  1383 00001027 E8(00000000)                    call exit
+  1384                                  
+  1385                                  L_code_ptr_integer_to_real:
+  1386 0000102C C8000000                        enter 0, 0
+  1387 00001030 48837D1801                      cmp COUNT, 1
+  1388 00001035 0F857C0D0000                    jne L_error_arg_count_1
+  1389 0000103B 488B4520                        mov rax, PARAM(0)
+  1390                                          assert_integer(rax)
+    53 0000103F 803811              <1>  cmp byte [%1], %2
+    54 00001042 0F85430E0000        <1>  jne L_error_incorrect_type
+  1391 00001048 FF7001                          push qword [rax + 1]
+  1392 0000104B F2480F2A0424                    cvtsi2sd xmm0, qword [rsp]
+  1393 00001051 E8980C0000                      call make_real
+  1394 00001056 C9                              leave
+  1395 00001057 C21800                          ret AND_KILL_FRAME(1)
+  1396                                  
+  1397                                  L_code_ptr_fraction_to_real:
+  1398 0000105A C8000000                        enter 0, 0
+  1399 0000105E 48837D1801                      cmp COUNT, 1
+  1400 00001063 0F854E0D0000                    jne L_error_arg_count_1
+  1401 00001069 488B4520                        mov rax, PARAM(0)
+  1402                                          assert_fraction(rax)
+    53 0000106D 803812              <1>  cmp byte [%1], %2
+    54 00001070 0F85150E0000        <1>  jne L_error_incorrect_type
+  1403 00001076 FF7001                          push qword [rax + 1]
+  1404 00001079 F2480F2A0424                    cvtsi2sd xmm0, qword [rsp]
+  1405 0000107F FF7009                          push qword [rax + 1 + 8]
+  1406 00001082 F2480F2A0C24                    cvtsi2sd xmm1, qword [rsp]
+  1407 00001088 F20F5EC1                        divsd xmm0, xmm1
+  1408 0000108C E85D0C0000                      call make_real
+  1409 00001091 C9                              leave
+  1410 00001092 C21800                          ret AND_KILL_FRAME(1)
+  1411                                  
+  1412                                  L_code_ptr_char_to_integer:
+  1413 00001095 C8000000                        enter 0, 0
+  1414 00001099 48837D1801                      cmp COUNT, 1
+  1415 0000109E 0F85130D0000                    jne L_error_arg_count_1
+  1416 000010A4 488B4520                        mov rax, PARAM(0)
+  1417                                          assert_char(rax)
+    53 000010A8 803802              <1>  cmp byte [%1], %2
+    54 000010AB 0F85DA0D0000        <1>  jne L_error_incorrect_type
+  1418 000010B1 8A4001                          mov al, byte [rax + 1]
+  1419 000010B4 4825FF000000                    and rax, 255
+  1420 000010BA 4889C7                          mov rdi, rax
+  1421 000010BD E8440C0000                      call make_integer
+  1422 000010C2 C9                              leave
+  1423 000010C3 C21800                          ret AND_KILL_FRAME(1)
+  1424                                  
+  1425                                  L_code_ptr_integer_to_fraction:
+  1426 000010C6 C8000000                        enter 0, 0
+  1427 000010CA 48837D1801                      cmp COUNT, 1
+  1428 000010CF 0F85E20C0000                    jne L_error_arg_count_1
+  1429 000010D5 4C8B4520                        mov r8, PARAM(0)
+  1430                                          assert_integer(r8)
+    53 000010D9 41803811            <1>  cmp byte [%1], %2
+    54 000010DD 0F85A80D0000        <1>  jne L_error_incorrect_type
+  1431 000010E3 BF11000000                      mov rdi, (1 + 8 + 8)
+  1432 000010E8 E89CF0FFFF                      call malloc
+  1433 000010ED 498B5801                        mov rbx, qword [r8 + 1]
+  1434 000010F1 C60012                          mov byte [rax], T_fraction
+  1435 000010F4 48895801                        mov qword [rax + 1], rbx
+  1436 000010F8 48C7400901000000                mov qword [rax + 1 + 8], 1
+  1437 00001100 C9                              leave
+  1438 00001101 C21800                          ret AND_KILL_FRAME(1)
+  1439                                  
+  1440                                  L_code_ptr_integer_to_char:
+  1441 00001104 C8000000                        enter 0, 0
+  1442 00001108 48837D1801                      cmp COUNT, 1
+  1443 0000110D 0F85A40C0000                    jne L_error_arg_count_1
+  1444 00001113 488B4520                        mov rax, PARAM(0)
+  1445                                          assert_integer(rax)
+    53 00001117 803811              <1>  cmp byte [%1], %2
+    54 0000111A 0F856B0D0000        <1>  jne L_error_incorrect_type
+  1446 00001120 488B5801                        mov rbx, qword [rax + 1]
+  1447 00001124 4883FB00                        cmp rbx, 0
+  1448 00001128 0F8EF20B0000                    jle L_error_integer_range
+  1449 0000112E 4881FB00010000                  cmp rbx, 256
+  1450 00001135 0F8DE50B0000                    jge L_error_integer_range
+  1451 0000113B BF02000000                      mov rdi, (1 + 1)
+  1452 00001140 E844F0FFFF                      call malloc
+  1453 00001145 C60002                          mov byte [rax], T_char
+  1454 00001148 885801                          mov byte [rax + 1], bl
+  1455 0000114B C9                              leave
+  1456 0000114C C21800                          ret AND_KILL_FRAME(1)
+  1457                                  
+  1458                                  L_code_ptr_trng:
+  1459 0000114F C8000000                        enter 0, 0
+  1460 00001153 48837D1800                      cmp COUNT, 0
+  1461 00001158 0F85240C0000                    jne L_error_arg_count_0
+  1462 0000115E 480FC7F7                        rdrand rdi
+  1463 00001162 48D1EF                          shr rdi, 1
+  1464 00001165 E89C0B0000                      call make_integer
+  1465 0000116A C9                              leave
+  1466 0000116B C21000                          ret AND_KILL_FRAME(0)
+  1467                                  
+  1468                                  L_code_ptr_is_zero:
+  1469 0000116E C8000000                        enter 0, 0
+  1470 00001172 48837D1801                      cmp COUNT, 1
+  1471 00001177 0F853A0C0000                    jne L_error_arg_count_1
+  1472 0000117D 488B4520                        mov rax, PARAM(0)
+  1473 00001181 803811                          cmp byte [rax], T_integer
+  1474 00001184 740F                            je .L_integer
+  1475 00001186 803812                          cmp byte [rax], T_fraction
+  1476 00001189 7413                            je .L_fraction
+  1477 0000118B 803813                          cmp byte [rax], T_real
+  1478 0000118E 7417                            je .L_real
+  1479 00001190 E9F60C0000                      jmp L_error_incorrect_type
+  1480                                  .L_integer:
+  1481 00001195 4883780100                      cmp qword [rax + 1], 0
+  1482 0000119A 7429                            je .L_zero
+  1483 0000119C EB1B                            jmp .L_not_zero
+  1484                                  .L_fraction:
+  1485 0000119E 4883780100                      cmp qword [rax + 1], 0
+  1486 000011A3 7420                            je .L_zero
+  1487 000011A5 EB12                            jmp .L_not_zero
+  1488                                  .L_real:
+  1489 000011A7 660FEFC0                        pxor xmm0, xmm0
+  1490 000011AB FF7001                          push qword [rax + 1]
+  1491 000011AE F20F100C24                      movsd xmm1, qword [rsp]
+  1492 000011B3 660F2EC1                        ucomisd xmm0, xmm1
+  1493 000011B7 740C                            je .L_zero
+  1494                                  .L_not_zero:
+  1495 000011B9 48B8-                           mov rax, sob_boolean_false
+  1495 000011BB [0200000000000000] 
+  1496 000011C3 EB0A                            jmp .L_end
+  1497                                  .L_zero:
+  1498 000011C5 48B8-                           mov rax, sob_boolean_true
+  1498 000011C7 [0300000000000000] 
+  1499                                  .L_end:
+  1500 000011CF C9                              leave
+  1501 000011D0 C21800                          ret AND_KILL_FRAME(1)
+  1502                                  
+  1503                                  L_code_ptr_is_integer:
+  1504 000011D3 C8000000                        enter 0, 0
+  1505 000011D7 48837D1801                      cmp COUNT, 1
+  1506 000011DC 0F85D50B0000                    jne L_error_arg_count_1
+  1507 000011E2 488B4520                        mov rax, PARAM(0)
+  1508 000011E6 803811                          cmp byte [rax], T_integer
+  1509 000011E9 750C                            jne .L_false
+  1510 000011EB 48B8-                           mov rax, sob_boolean_true
+  1510 000011ED [0300000000000000] 
+  1511 000011F5 EB0A                            jmp .L_exit
+  1512                                  .L_false:
+  1513 000011F7 48B8-                           mov rax, sob_boolean_false
+  1513 000011F9 [0200000000000000] 
+  1514                                  .L_exit:
+  1515 00001201 C9                              leave
+  1516 00001202 C21800                          ret AND_KILL_FRAME(1)
+  1517                                  
+  1518                                  L_code_ptr_raw_bin_add_rr:
+  1519 00001205 C8000000                        enter 0, 0
+  1520 00001209 48837D1802                      cmp COUNT, 2
+  1521 0000120E 0F85D80B0000                    jne L_error_arg_count_2
+  1522 00001214 488B5D20                        mov rbx, PARAM(0)
+  1523                                          assert_real(rbx)
+    53 00001218 803B13              <1>  cmp byte [%1], %2
+    54 0000121B 0F856A0C0000        <1>  jne L_error_incorrect_type
+  1524 00001221 488B4D28                        mov rcx, PARAM(1)
+  1525                                          assert_real(rcx)
+    53 00001225 803913              <1>  cmp byte [%1], %2
+    54 00001228 0F855D0C0000        <1>  jne L_error_incorrect_type
+  1526 0000122E F20F104301                      movsd xmm0, qword [rbx + 1]
+  1527 00001233 F20F104901                      movsd xmm1, qword [rcx + 1]
+  1528 00001238 F20F58C1                        addsd xmm0, xmm1
+  1529 0000123C E8AD0A0000                      call make_real
+  1530 00001241 C9                              leave
+  1531 00001242 C22000                          ret AND_KILL_FRAME(2)
+  1532                                  
+  1533                                  L_code_ptr_raw_bin_sub_rr:
+  1534 00001245 C8000000                        enter 0, 0
+  1535 00001249 48837D1802                      cmp COUNT, 2
+  1536 0000124E 0F85980B0000                    jne L_error_arg_count_2
+  1537 00001254 488B5D20                        mov rbx, PARAM(0)
+  1538                                          assert_real(rbx)
+    53 00001258 803B13              <1>  cmp byte [%1], %2
+    54 0000125B 0F852A0C0000        <1>  jne L_error_incorrect_type
+  1539 00001261 488B4D28                        mov rcx, PARAM(1)
+  1540                                          assert_real(rcx)
+    53 00001265 803913              <1>  cmp byte [%1], %2
+    54 00001268 0F851D0C0000        <1>  jne L_error_incorrect_type
+  1541 0000126E F20F104301                      movsd xmm0, qword [rbx + 1]
+  1542 00001273 F20F104901                      movsd xmm1, qword [rcx + 1]
+  1543 00001278 F20F5CC1                        subsd xmm0, xmm1
+  1544 0000127C E86D0A0000                      call make_real
+  1545 00001281 C9                              leave
+  1546 00001282 C22000                          ret AND_KILL_FRAME(2)
+  1547                                  
+  1548                                  L_code_ptr_raw_bin_mul_rr:
+  1549 00001285 C8000000                        enter 0, 0
+  1550 00001289 48837D1802                      cmp COUNT, 2
+  1551 0000128E 0F85580B0000                    jne L_error_arg_count_2
+  1552 00001294 488B5D20                        mov rbx, PARAM(0)
+  1553                                          assert_real(rbx)
+    53 00001298 803B13              <1>  cmp byte [%1], %2
+    54 0000129B 0F85EA0B0000        <1>  jne L_error_incorrect_type
+  1554 000012A1 488B4D28                        mov rcx, PARAM(1)
+  1555                                          assert_real(rcx)
+    53 000012A5 803913              <1>  cmp byte [%1], %2
+    54 000012A8 0F85DD0B0000        <1>  jne L_error_incorrect_type
+  1556 000012AE F20F104301                      movsd xmm0, qword [rbx + 1]
+  1557 000012B3 F20F104901                      movsd xmm1, qword [rcx + 1]
+  1558 000012B8 F20F59C1                        mulsd xmm0, xmm1
+  1559 000012BC E82D0A0000                      call make_real
+  1560 000012C1 C9                              leave
+  1561 000012C2 C22000                          ret AND_KILL_FRAME(2)
+  1562                                  
+  1563                                  L_code_ptr_raw_bin_div_rr:
+  1564 000012C5 C8000000                        enter 0, 0
+  1565 000012C9 48837D1802                      cmp COUNT, 2
+  1566 000012CE 0F85180B0000                    jne L_error_arg_count_2
+  1567 000012D4 488B5D20                        mov rbx, PARAM(0)
+  1568                                          assert_real(rbx)
+    53 000012D8 803B13              <1>  cmp byte [%1], %2
+    54 000012DB 0F85AA0B0000        <1>  jne L_error_incorrect_type
+  1569 000012E1 488B4D28                        mov rcx, PARAM(1)
+  1570                                          assert_real(rcx)
+    53 000012E5 803913              <1>  cmp byte [%1], %2
+    54 000012E8 0F859D0B0000        <1>  jne L_error_incorrect_type
+  1571 000012EE F20F104301                      movsd xmm0, qword [rbx + 1]
+  1572 000012F3 F20F104901                      movsd xmm1, qword [rcx + 1]
+  1573 000012F8 660FEFD2                        pxor xmm2, xmm2
+  1574 000012FC 660F2ECA                        ucomisd xmm1, xmm2
+  1575 00001300 0F84B60B0000                    je L_error_division_by_zero
+  1576 00001306 F20F5EC1                        divsd xmm0, xmm1
+  1577 0000130A E8DF090000                      call make_real
+  1578 0000130F C9                              leave
+  1579 00001310 C22000                          ret AND_KILL_FRAME(2)
+  1580                                  
+  1581                                  L_code_ptr_raw_bin_add_zz:
+  1582 00001313 C8000000                	enter 0, 0
+  1583 00001317 48837D1802              	cmp COUNT, 2
+  1584 0000131C 0F85CA0A0000            	jne L_error_arg_count_2
+  1585 00001322 4C8B4520                	mov r8, PARAM(0)
+  1586                                  	assert_integer(r8)
+    53 00001326 41803811            <1>  cmp byte [%1], %2
+    54 0000132A 0F855B0B0000        <1>  jne L_error_incorrect_type
+  1587 00001330 4C8B4D28                	mov r9, PARAM(1)
+  1588                                  	assert_integer(r9)
+    53 00001334 41803911            <1>  cmp byte [%1], %2
+    54 00001338 0F854D0B0000        <1>  jne L_error_incorrect_type
+  1589 0000133E 498B7801                	mov rdi, qword [r8 + 1]
+  1590 00001342 49037901                	add rdi, qword [r9 + 1]
+  1591 00001346 E8BB090000              	call make_integer
+  1592 0000134B C9                      	leave
+  1593 0000134C C22000                  	ret AND_KILL_FRAME(2)
+  1594                                  
+  1595                                  L_code_ptr_raw_bin_add_qq:
+  1596 0000134F C8000000                        enter 0, 0
+  1597 00001353 48837D1802                      cmp COUNT, 2
+  1598 00001358 0F858E0A0000                    jne L_error_arg_count_2
+  1599 0000135E 4C8B4520                        mov r8, PARAM(0)
+  1600                                          assert_fraction(r8)
+    53 00001362 41803812            <1>  cmp byte [%1], %2
+    54 00001366 0F851F0B0000        <1>  jne L_error_incorrect_type
+  1601 0000136C 4C8B4D28                        mov r9, PARAM(1)
+  1602                                          assert_fraction(r9)
+    53 00001370 41803912            <1>  cmp byte [%1], %2
+    54 00001374 0F85110B0000        <1>  jne L_error_incorrect_type
+  1603 0000137A 498B4001                        mov rax, qword [r8 + 1] ; num1
+  1604 0000137E 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den 2
+  1605 00001382 4899                            cqo
+  1606 00001384 48F7EB                          imul rbx
+  1607 00001387 4889C6                          mov rsi, rax
+  1608 0000138A 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1609 0000138E 498B5901                        mov rbx, qword [r9 + 1]     ; num2
+  1610 00001392 4899                            cqo
+  1611 00001394 48F7EB                          imul rbx
+  1612 00001397 4801C6                          add rsi, rax
+  1613 0000139A 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1614 0000139E 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den2
+  1615 000013A2 4899                            cqo
+  1616 000013A4 48F7EB                          imul rbx
+  1617 000013A7 4889C7                          mov rdi, rax
+  1618 000013AA E8DE010000                      call normalize_fraction
+  1619 000013AF C9                              leave
+  1620 000013B0 C22000                          ret AND_KILL_FRAME(2)
+  1621                                  
+  1622                                  L_code_ptr_raw_bin_sub_zz:
+  1623 000013B3 C8000000                	enter 0, 0
+  1624 000013B7 48837D1802              	cmp COUNT, 2
+  1625 000013BC 0F852A0A0000            	jne L_error_arg_count_2
+  1626 000013C2 4C8B4520                	mov r8, PARAM(0)
+  1627                                  	assert_integer(r8)
+    53 000013C6 41803811            <1>  cmp byte [%1], %2
+    54 000013CA 0F85BB0A0000        <1>  jne L_error_incorrect_type
+  1628 000013D0 4C8B4D28                	mov r9, PARAM(1)
+  1629                                  	assert_integer(r9)
+    53 000013D4 41803911            <1>  cmp byte [%1], %2
+    54 000013D8 0F85AD0A0000        <1>  jne L_error_incorrect_type
+  1630 000013DE 498B7801                	mov rdi, qword [r8 + 1]
+  1631 000013E2 492B7901                	sub rdi, qword [r9 + 1]
+  1632 000013E6 E81B090000              	call make_integer
+  1633 000013EB C9                      	leave
+  1634 000013EC C22000                  	ret AND_KILL_FRAME(2)
+  1635                                  
+  1636                                  L_code_ptr_raw_bin_sub_qq:
+  1637 000013EF C8000000                        enter 0, 0
+  1638 000013F3 48837D1802                      cmp COUNT, 2
+  1639 000013F8 0F85EE090000                    jne L_error_arg_count_2
+  1640 000013FE 4C8B4520                        mov r8, PARAM(0)
+  1641                                          assert_fraction(r8)
+    53 00001402 41803812            <1>  cmp byte [%1], %2
+    54 00001406 0F857F0A0000        <1>  jne L_error_incorrect_type
+  1642 0000140C 4C8B4D28                        mov r9, PARAM(1)
+  1643                                          assert_fraction(r9)
+    53 00001410 41803912            <1>  cmp byte [%1], %2
+    54 00001414 0F85710A0000        <1>  jne L_error_incorrect_type
+  1644 0000141A 498B4001                        mov rax, qword [r8 + 1] ; num1
+  1645 0000141E 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den 2
+  1646 00001422 4899                            cqo
+  1647 00001424 48F7EB                          imul rbx
+  1648 00001427 4889C6                          mov rsi, rax
+  1649 0000142A 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1650 0000142E 498B5901                        mov rbx, qword [r9 + 1]     ; num2
+  1651 00001432 4899                            cqo
+  1652 00001434 48F7EB                          imul rbx
+  1653 00001437 4829C6                          sub rsi, rax
+  1654 0000143A 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1655 0000143E 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den2
+  1656 00001442 4899                            cqo
+  1657 00001444 48F7EB                          imul rbx
+  1658 00001447 4889C7                          mov rdi, rax
+  1659 0000144A E83E010000                      call normalize_fraction
+  1660 0000144F C9                              leave
+  1661 00001450 C22000                          ret AND_KILL_FRAME(2)
+  1662                                  
+  1663                                  L_code_ptr_raw_bin_mul_zz:
+  1664 00001453 C8000000                	enter 0, 0
+  1665 00001457 48837D1802              	cmp COUNT, 2
+  1666 0000145C 0F858A090000            	jne L_error_arg_count_2
+  1667 00001462 4C8B4520                	mov r8, PARAM(0)
+  1668                                  	assert_integer(r8)
+    53 00001466 41803811            <1>  cmp byte [%1], %2
+    54 0000146A 0F851B0A0000        <1>  jne L_error_incorrect_type
+  1669 00001470 4C8B4D28                	mov r9, PARAM(1)
+  1670                                  	assert_integer(r9)
+    53 00001474 41803911            <1>  cmp byte [%1], %2
+    54 00001478 0F850D0A0000        <1>  jne L_error_incorrect_type
+  1671 0000147E 4899                    	cqo
+  1672 00001480 498B4001                	mov rax, qword [r8 + 1]
+  1673 00001484 49F76101                	mul qword [r9 + 1]
+  1674 00001488 4889C7                  	mov rdi, rax
+  1675 0000148B E876080000              	call make_integer
+  1676 00001490 C9                      	leave
+  1677 00001491 C22000                  	ret AND_KILL_FRAME(2)
+  1678                                  
+  1679                                  L_code_ptr_raw_bin_mul_qq:
+  1680 00001494 C8000000                        enter 0, 0
+  1681 00001498 48837D1802                      cmp COUNT, 2
+  1682 0000149D 0F8549090000                    jne L_error_arg_count_2
+  1683 000014A3 4C8B4520                        mov r8, PARAM(0)
+  1684                                          assert_fraction(r8)
+    53 000014A7 41803812            <1>  cmp byte [%1], %2
+    54 000014AB 0F85DA090000        <1>  jne L_error_incorrect_type
+  1685 000014B1 4C8B4D28                        mov r9, PARAM(1)
+  1686                                          assert_fraction(r9)
+    53 000014B5 41803912            <1>  cmp byte [%1], %2
+    54 000014B9 0F85CC090000        <1>  jne L_error_incorrect_type
+  1687 000014BF 498B4001                        mov rax, qword [r8 + 1] ; num1
+  1688 000014C3 498B5901                        mov rbx, qword [r9 + 1] ; num2
+  1689 000014C7 4899                            cqo
+  1690 000014C9 48F7EB                          imul rbx
+  1691 000014CC 4889C6                          mov rsi, rax
+  1692 000014CF 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1693 000014D3 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den2
+  1694 000014D7 4899                            cqo
+  1695 000014D9 48F7EB                          imul rbx
+  1696 000014DC 4889C7                          mov rdi, rax
+  1697 000014DF E8A9000000                      call normalize_fraction
+  1698 000014E4 C9                              leave
+  1699 000014E5 C22000                          ret AND_KILL_FRAME(2)
+  1700                                          
+  1701                                  L_code_ptr_raw_bin_div_zz:
+  1702 000014E8 C8000000                	enter 0, 0
+  1703 000014EC 48837D1802              	cmp COUNT, 2
+  1704 000014F1 0F85F5080000            	jne L_error_arg_count_2
+  1705 000014F7 4C8B4520                	mov r8, PARAM(0)
+  1706                                  	assert_integer(r8)
+    53 000014FB 41803811            <1>  cmp byte [%1], %2
+    54 000014FF 0F8586090000        <1>  jne L_error_incorrect_type
+  1707 00001505 4C8B4D28                	mov r9, PARAM(1)
+  1708                                  	assert_integer(r9)
+    53 00001509 41803911            <1>  cmp byte [%1], %2
+    54 0000150D 0F8578090000        <1>  jne L_error_incorrect_type
+  1709 00001513 498B7901                	mov rdi, qword [r9 + 1]
+  1710 00001517 4883FF00                	cmp rdi, 0
+  1711 0000151B 0F849B090000            	je L_error_division_by_zero
+  1712 00001521 498B7001                	mov rsi, qword [r8 + 1]
+  1713 00001525 E863000000              	call normalize_fraction
+  1714 0000152A C9                      	leave
+  1715 0000152B C22000                  	ret AND_KILL_FRAME(2)
+  1716                                  
+  1717                                  L_code_ptr_raw_bin_div_qq:
+  1718 0000152E C8000000                        enter 0, 0
+  1719 00001532 48837D1802                      cmp COUNT, 2
+  1720 00001537 0F85AF080000                    jne L_error_arg_count_2
+  1721 0000153D 4C8B4520                        mov r8, PARAM(0)
+  1722                                          assert_fraction(r8)
+    53 00001541 41803812            <1>  cmp byte [%1], %2
+    54 00001545 0F8540090000        <1>  jne L_error_incorrect_type
+  1723 0000154B 4C8B4D28                        mov r9, PARAM(1)
+  1724                                          assert_fraction(r9)
+    53 0000154F 41803912            <1>  cmp byte [%1], %2
+    54 00001553 0F8532090000        <1>  jne L_error_incorrect_type
+  1725 00001559 4983790100                      cmp qword [r9 + 1], 0
+  1726 0000155E 0F8458090000                    je L_error_division_by_zero
+  1727 00001564 498B4001                        mov rax, qword [r8 + 1] ; num1
+  1728 00001568 498B5909                        mov rbx, qword [r9 + 1 + 8] ; den 2
+  1729 0000156C 4899                            cqo
+  1730 0000156E 48F7EB                          imul rbx
+  1731 00001571 4889C6                          mov rsi, rax
+  1732 00001574 498B4009                        mov rax, qword [r8 + 1 + 8] ; den1
+  1733 00001578 498B5901                        mov rbx, qword [r9 + 1] ; num2
+  1734 0000157C 4899                            cqo
+  1735 0000157E 48F7EB                          imul rbx
+  1736 00001581 4889C7                          mov rdi, rax
+  1737 00001584 E804000000                      call normalize_fraction
+  1738 00001589 C9                              leave
+  1739 0000158A C22000                          ret AND_KILL_FRAME(2)
+  1740                                          
+  1741                                  normalize_fraction:
+  1742 0000158D 56                              push rsi
+  1743 0000158E 57                              push rdi
+  1744 0000158F E859000000                      call gcd
+  1745 00001594 4889C3                          mov rbx, rax
+  1746 00001597 58                              pop rax
+  1747 00001598 4899                            cqo
+  1748 0000159A 48F7FB                          idiv rbx
+  1749 0000159D 4989C0                          mov r8, rax
+  1750 000015A0 58                              pop rax
+  1751 000015A1 4899                            cqo
+  1752 000015A3 48F7FB                          idiv rbx
+  1753 000015A6 4989C1                          mov r9, rax
+  1754 000015A9 4983F900                        cmp r9, 0
+  1755 000015AD 741C                            je .L_zero
+  1756 000015AF 4983F801                        cmp r8, 1
+  1757 000015B3 7421                            je .L_int
+  1758 000015B5 BF11000000                      mov rdi, (1 + 8 + 8)
+  1759 000015BA E8CAEBFFFF                      call malloc
+  1760 000015BF C60012                          mov byte [rax], T_fraction
+  1761 000015C2 4C894801                        mov qword [rax + 1], r9
+  1762 000015C6 4C894009                        mov qword [rax + 1 + 8], r8
+  1763 000015CA C3                              ret
+  1764                                  .L_zero:
+  1765 000015CB BF00000000                      mov rdi, 0
+  1766 000015D0 E831070000                      call make_integer
+  1767 000015D5 C3                              ret
+  1768                                  .L_int:
+  1769 000015D6 4C89CF                          mov rdi, r9
+  1770 000015D9 E828070000                      call make_integer
+  1771 000015DE C3                              ret
+  1772                                  
+  1773                                  iabs:
+  1774 000015DF 4889F8                          mov rax, rdi
+  1775 000015E2 4883F800                        cmp rax, 0
+  1776 000015E6 7C01                            jl .Lneg
+  1777 000015E8 C3                              ret
+  1778                                  .Lneg:
+  1779 000015E9 48F7D8                          neg rax
+  1780 000015EC C3                              ret
+  1781                                  
+  1782                                  gcd:
+  1783 000015ED E8EDFFFFFF                      call iabs
+  1784 000015F2 4889C3                          mov rbx, rax
+  1785 000015F5 4889F7                          mov rdi, rsi
+  1786 000015F8 E8E2FFFFFF                      call iabs
+  1787 000015FD 4883F800                        cmp rax, 0
+  1788 00001601 7502                            jne .L0
+  1789 00001603 4893                            xchg rax, rbx
+  1790                                  .L0:
+  1791 00001605 4883FB00                        cmp rbx, 0
+  1792 00001609 740C                            je .L1
+  1793 0000160B 4899                            cqo
+  1794 0000160D 48F7F3                          div rbx
+  1795 00001610 4889D0                          mov rax, rdx
+  1796 00001613 4893                            xchg rax, rbx
+  1797 00001615 EBEE                            jmp .L0
+  1798                                  .L1:
+  1799 00001617 C3                              ret
+  1800                                  
+  1801                                  L_code_ptr_error:
+  1802 00001618 C8000000                        enter 0, 0
+  1803 0000161C 48837D1802                      cmp COUNT, 2
+  1804 00001621 0F85C5070000                    jne L_error_arg_count_2
+  1805 00001627 488B7520                        mov rsi, PARAM(0)
+  1806                                          assert_interned_symbol(rsi)
+    53 0000162B 803E41              <1>  cmp byte [%1], %2
+    54 0000162E 0F8557080000        <1>  jne L_error_incorrect_type
+  1807 00001634 488B7528                        mov rsi, PARAM(1)
+  1808                                          assert_string(rsi)
+    53 00001638 803E03              <1>  cmp byte [%1], %2
+    54 0000163B 0F854A080000        <1>  jne L_error_incorrect_type
+  1809 00001641 48BF-                           mov rdi, fmt_scheme_error_part_1
+  1809 00001643 [3F04000000000000] 
+  1810 0000164B B800000000                      mov rax, 0
+  1811                                          ENTER
+    44 00001650 C8000000            <1>  enter 0, 0
+    45 00001654 4883E4F0            <1>  and rsp, ~15
+  1812 00001658 E8(00000000)                    call printf
+  1813                                          LEAVE
+    49 0000165D C9                  <1>  leave
+  1814 0000165E 488B7D20                        mov rdi, PARAM(0)
+  1815 00001662 E8A3EDFFFF                      call print_sexpr
+  1816 00001667 48BF-                           mov rdi, fmt_scheme_error_part_2
+  1816 00001669 [5304000000000000] 
+  1817 00001671 B800000000                      mov rax, 0
+  1818                                          ENTER
+    44 00001676 C8000000            <1>  enter 0, 0
+    45 0000167A 4883E4F0            <1>  and rsp, ~15
+  1819 0000167E E8(00000000)                    call printf
+  1820                                          LEAVE
+    49 00001683 C9                  <1>  leave
+  1821 00001684 488B4528                        mov rax, PARAM(1)       ; sob_string
+  1822 00001688 BE01000000                      mov rsi, 1              ; size = 1 byte
+  1823 0000168D 488B5001                        mov rdx, qword [rax + 1] ; length
+  1824 00001691 488D7809                        lea rdi, [rax + 1 + 8]   ; actual characters
+  1825 00001695 488B0C25[00000000]              mov rcx, qword [stdout]  ; FILE*
+  1826                                  	ENTER
+    44 0000169D C8000000            <1>  enter 0, 0
+    45 000016A1 4883E4F0            <1>  and rsp, ~15
+  1827 000016A5 E8(00000000)                    call fwrite
+  1828                                  	LEAVE
+    49 000016AA C9                  <1>  leave
+  1829 000016AB 48BF-                           mov rdi, fmt_scheme_error_part_3
+  1829 000016AD [9504000000000000] 
+  1830 000016B5 B800000000                      mov rax, 0
+  1831                                          ENTER
+    44 000016BA C8000000            <1>  enter 0, 0
+    45 000016BE 4883E4F0            <1>  and rsp, ~15
+  1832 000016C2 E8(00000000)                    call printf
+  1833                                          LEAVE
+    49 000016C7 C9                  <1>  leave
+  1834 000016C8 48C7C0F7FFFFFF                  mov rax, -9
+  1835 000016CF E8(00000000)                    call exit
+  1836                                  
+  1837                                  L_code_ptr_raw_less_than_rr:
+  1838 000016D4 C8000000                        enter 0, 0
+  1839 000016D8 48837D1802                      cmp COUNT, 2
+  1840 000016DD 0F8509070000                    jne L_error_arg_count_2
+  1841 000016E3 488B7520                        mov rsi, PARAM(0)
+  1842                                          assert_real(rsi)
+    53 000016E7 803E13              <1>  cmp byte [%1], %2
+    54 000016EA 0F859B070000        <1>  jne L_error_incorrect_type
+  1843 000016F0 488B7D28                        mov rdi, PARAM(1)
+  1844                                          assert_real(rdi)
+    53 000016F4 803F13              <1>  cmp byte [%1], %2
+    54 000016F7 0F858E070000        <1>  jne L_error_incorrect_type
+  1845 000016FD F20F104601                      movsd xmm0, qword [rsi + 1]
+  1846 00001702 F20F104F01                      movsd xmm1, qword [rdi + 1]
+  1847 00001707 660F2FC1                        comisd xmm0, xmm1
+  1848 0000170B 730C                            jae .L_false
+  1849 0000170D 48B8-                           mov rax, sob_boolean_true
+  1849 0000170F [0300000000000000] 
+  1850 00001717 EB0A                            jmp .L_exit
+  1851                                  .L_false:
+  1852 00001719 48B8-                           mov rax, sob_boolean_false
+  1852 0000171B [0200000000000000] 
+  1853                                  .L_exit:
+  1854 00001723 C9                              leave
+  1855 00001724 C22000                          ret AND_KILL_FRAME(2)
+  1856                                          
+  1857                                  L_code_ptr_raw_less_than_zz:
+  1858 00001727 C8000000                	enter 0, 0
+  1859 0000172B 48837D1802              	cmp COUNT, 2
+  1860 00001730 0F85B6060000            	jne L_error_arg_count_2
+  1861 00001736 4C8B4520                	mov r8, PARAM(0)
+  1862                                  	assert_integer(r8)
+    53 0000173A 41803811            <1>  cmp byte [%1], %2
+    54 0000173E 0F8547070000        <1>  jne L_error_incorrect_type
+  1863 00001744 4C8B4D28                	mov r9, PARAM(1)
+  1864                                  	assert_integer(r9)
+    53 00001748 41803911            <1>  cmp byte [%1], %2
+    54 0000174C 0F8539070000        <1>  jne L_error_incorrect_type
+  1865 00001752 498B7801                	mov rdi, qword [r8 + 1]
+  1866 00001756 493B7901                	cmp rdi, qword [r9 + 1]
+  1867 0000175A 7D0C                    	jge .L_false
+  1868 0000175C 48B8-                   	mov rax, sob_boolean_true
+  1868 0000175E [0300000000000000] 
+  1869 00001766 EB0A                    	jmp .L_exit
+  1870                                  .L_false:
+  1871 00001768 48B8-                   	mov rax, sob_boolean_false
+  1871 0000176A [0200000000000000] 
+  1872                                  .L_exit:
+  1873 00001772 C9                      	leave
+  1874 00001773 C22000                  	ret AND_KILL_FRAME(2)
+  1875                                  
+  1876                                  L_code_ptr_raw_less_than_qq:
+  1877 00001776 C8000000                        enter 0, 0
+  1878 0000177A 48837D1802                      cmp COUNT, 2
+  1879 0000177F 0F8567060000                    jne L_error_arg_count_2
+  1880 00001785 488B7520                        mov rsi, PARAM(0)
+  1881                                          assert_fraction(rsi)
+    53 00001789 803E12              <1>  cmp byte [%1], %2
+    54 0000178C 0F85F9060000        <1>  jne L_error_incorrect_type
+  1882 00001792 488B7D28                        mov rdi, PARAM(1)
+  1883                                          assert_fraction(rdi)
+    53 00001796 803F12              <1>  cmp byte [%1], %2
+    54 00001799 0F85EC060000        <1>  jne L_error_incorrect_type
+  1884 0000179F 488B4601                        mov rax, qword [rsi + 1] ; num1
+  1885 000017A3 4899                            cqo
+  1886 000017A5 48F76F09                        imul qword [rdi + 1 + 8] ; den2
+  1887 000017A9 4889C1                          mov rcx, rax
+  1888 000017AC 488B4609                        mov rax, qword [rsi + 1 + 8] ; den1
+  1889 000017B0 4899                            cqo
+  1890 000017B2 48F76F01                        imul qword [rdi + 1]          ; num2
+  1891 000017B6 4829C1                          sub rcx, rax
+  1892 000017B9 7D0C                            jge .L_false
+  1893 000017BB 48B8-                           mov rax, sob_boolean_true
+  1893 000017BD [0300000000000000] 
+  1894 000017C5 EB0A                            jmp .L_exit
+  1895                                  .L_false:
+  1896 000017C7 48B8-                           mov rax, sob_boolean_false
+  1896 000017C9 [0200000000000000] 
+  1897                                  .L_exit:
+  1898 000017D1 C9                              leave
+  1899 000017D2 C22000                          ret AND_KILL_FRAME(2)
+  1900                                  
+  1901                                  L_code_ptr_raw_equal_rr:
+  1902 000017D5 C8000000                        enter 0, 0
+  1903 000017D9 48837D1802                      cmp COUNT, 2
+  1904 000017DE 0F8508060000                    jne L_error_arg_count_2
+  1905 000017E4 488B7520                        mov rsi, PARAM(0)
+  1906                                          assert_real(rsi)
+    53 000017E8 803E13              <1>  cmp byte [%1], %2
+    54 000017EB 0F859A060000        <1>  jne L_error_incorrect_type
+  1907 000017F1 488B7D28                        mov rdi, PARAM(1)
+  1908                                          assert_real(rdi)
+    53 000017F5 803F13              <1>  cmp byte [%1], %2
+    54 000017F8 0F858D060000        <1>  jne L_error_incorrect_type
+  1909 000017FE F20F104601                      movsd xmm0, qword [rsi + 1]
+  1910 00001803 F20F104F01                      movsd xmm1, qword [rdi + 1]
+  1911 00001808 660F2FC1                        comisd xmm0, xmm1
+  1912 0000180C 750C                            jne .L_false
+  1913 0000180E 48B8-                           mov rax, sob_boolean_true
+  1913 00001810 [0300000000000000] 
+  1914 00001818 EB0A                            jmp .L_exit
+  1915                                  .L_false:
+  1916 0000181A 48B8-                           mov rax, sob_boolean_false
+  1916 0000181C [0200000000000000] 
+  1917                                  .L_exit:
+  1918 00001824 C9                              leave
+  1919 00001825 C22000                          ret AND_KILL_FRAME(2)
+  1920                                          
+  1921                                  L_code_ptr_raw_equal_zz:
+  1922 00001828 C8000000                	enter 0, 0
+  1923 0000182C 48837D1802              	cmp COUNT, 2
+  1924 00001831 0F85B5050000            	jne L_error_arg_count_2
+  1925 00001837 4C8B4520                	mov r8, PARAM(0)
+  1926                                  	assert_integer(r8)
+    53 0000183B 41803811            <1>  cmp byte [%1], %2
+    54 0000183F 0F8546060000        <1>  jne L_error_incorrect_type
+  1927 00001845 4C8B4D28                	mov r9, PARAM(1)
+  1928                                  	assert_integer(r9)
+    53 00001849 41803911            <1>  cmp byte [%1], %2
+    54 0000184D 0F8538060000        <1>  jne L_error_incorrect_type
+  1929 00001853 498B7801                	mov rdi, qword [r8 + 1]
+  1930 00001857 493B7901                	cmp rdi, qword [r9 + 1]
+  1931 0000185B 750C                    	jne .L_false
+  1932 0000185D 48B8-                   	mov rax, sob_boolean_true
+  1932 0000185F [0300000000000000] 
+  1933 00001867 EB0A                    	jmp .L_exit
+  1934                                  .L_false:
+  1935 00001869 48B8-                   	mov rax, sob_boolean_false
+  1935 0000186B [0200000000000000] 
+  1936                                  .L_exit:
+  1937 00001873 C9                      	leave
+  1938 00001874 C22000                  	ret AND_KILL_FRAME(2)
+  1939                                  
+  1940                                  L_code_ptr_raw_equal_qq:
+  1941 00001877 C8000000                        enter 0, 0
+  1942 0000187B 48837D1802                      cmp COUNT, 2
+  1943 00001880 0F8566050000                    jne L_error_arg_count_2
+  1944 00001886 488B7520                        mov rsi, PARAM(0)
+  1945                                          assert_fraction(rsi)
+    53 0000188A 803E12              <1>  cmp byte [%1], %2
+    54 0000188D 0F85F8050000        <1>  jne L_error_incorrect_type
+  1946 00001893 488B7D28                        mov rdi, PARAM(1)
+  1947                                          assert_fraction(rdi)
+    53 00001897 803F12              <1>  cmp byte [%1], %2
+    54 0000189A 0F85EB050000        <1>  jne L_error_incorrect_type
+  1948 000018A0 488B4601                        mov rax, qword [rsi + 1] ; num1
+  1949 000018A4 4899                            cqo
+  1950 000018A6 48F76F09                        imul qword [rdi + 1 + 8] ; den2
+  1951 000018AA 4889C1                          mov rcx, rax
+  1952 000018AD 488B4709                        mov rax, qword [rdi + 1 + 8] ; den1
+  1953 000018B1 4899                            cqo
+  1954 000018B3 48F76F01                        imul qword [rdi + 1]          ; num2
+  1955 000018B7 4829C1                          sub rcx, rax
+  1956 000018BA 750C                            jne .L_false
+  1957 000018BC 48B8-                           mov rax, sob_boolean_true
+  1957 000018BE [0300000000000000] 
+  1958 000018C6 EB0A                            jmp .L_exit
+  1959                                  .L_false:
+  1960 000018C8 48B8-                           mov rax, sob_boolean_false
+  1960 000018CA [0200000000000000] 
+  1961                                  .L_exit:
+  1962 000018D2 C9                              leave
+  1963 000018D3 C22000                          ret AND_KILL_FRAME(2)
+  1964                                  
+  1965                                  L_code_ptr_quotient:
+  1966 000018D6 C8000000                        enter 0, 0
+  1967 000018DA 48837D1802                      cmp COUNT, 2
+  1968 000018DF 0F8507050000                    jne L_error_arg_count_2
+  1969 000018E5 488B7520                        mov rsi, PARAM(0)
+  1970                                          assert_integer(rsi)
+    53 000018E9 803E11              <1>  cmp byte [%1], %2
+    54 000018EC 0F8599050000        <1>  jne L_error_incorrect_type
+  1971 000018F2 488B7D28                        mov rdi, PARAM(1)
+  1972                                          assert_integer(rdi)
+    53 000018F6 803F11              <1>  cmp byte [%1], %2
+    54 000018F9 0F858C050000        <1>  jne L_error_incorrect_type
+  1973 000018FF 488B4601                        mov rax, qword [rsi + 1]
+  1974 00001903 488B5F01                        mov rbx, qword [rdi + 1]
+  1975 00001907 4883FB00                        cmp rbx, 0
+  1976 0000190B 0F84AB050000                    je L_error_division_by_zero
+  1977 00001911 4899                            cqo
+  1978 00001913 48F7FB                          idiv rbx
+  1979 00001916 4889C7                          mov rdi, rax
+  1980 00001919 E8E8030000                      call make_integer
+  1981 0000191E C9                              leave
+  1982 0000191F C22000                          ret AND_KILL_FRAME(2)
+  1983                                          
+  1984                                  L_code_ptr_remainder:
+  1985 00001922 C8000000                        enter 0, 0
+  1986 00001926 48837D1802                      cmp COUNT, 2
+  1987 0000192B 0F85BB040000                    jne L_error_arg_count_2
+  1988 00001931 488B7520                        mov rsi, PARAM(0)
+  1989                                          assert_integer(rsi)
+    53 00001935 803E11              <1>  cmp byte [%1], %2
+    54 00001938 0F854D050000        <1>  jne L_error_incorrect_type
+  1990 0000193E 488B7D28                        mov rdi, PARAM(1)
+  1991                                          assert_integer(rdi)
+    53 00001942 803F11              <1>  cmp byte [%1], %2
+    54 00001945 0F8540050000        <1>  jne L_error_incorrect_type
+  1992 0000194B 488B4601                        mov rax, qword [rsi + 1]
+  1993 0000194F 488B5F01                        mov rbx, qword [rdi + 1]
+  1994 00001953 4883FB00                        cmp rbx, 0
+  1995 00001957 0F845F050000                    je L_error_division_by_zero
+  1996 0000195D 4899                            cqo
+  1997 0000195F 48F7FB                          idiv rbx
+  1998 00001962 4889D7                          mov rdi, rdx
+  1999 00001965 E89C030000                      call make_integer
+  2000 0000196A C9                              leave
+  2001 0000196B C22000                          ret AND_KILL_FRAME(2)
+  2002                                  
+  2003                                  L_code_ptr_set_car:
+  2004 0000196E C8000000                        enter 0, 0
+  2005 00001972 48837D1802                      cmp COUNT, 2
+  2006 00001977 0F856F040000                    jne L_error_arg_count_2
+  2007 0000197D 488B4520                        mov rax, PARAM(0)
+  2008                                          assert_pair(rax)
+    53 00001981 803821              <1>  cmp byte [%1], %2
+    54 00001984 0F8501050000        <1>  jne L_error_incorrect_type
+  2009 0000198A 488B5D28                        mov rbx, PARAM(1)
+  2010 0000198E 48895801                        mov SOB_PAIR_CAR(rax), rbx
+  2011 00001992 48B8-                           mov rax, sob_void
+  2011 00001994 [0000000000000000] 
+  2012 0000199C C9                              leave
+  2013 0000199D C22000                          ret AND_KILL_FRAME(2)
+  2014                                  
+  2015                                  L_code_ptr_set_cdr:
+  2016 000019A0 C8000000                        enter 0, 0
+  2017 000019A4 48837D1802                      cmp COUNT, 2
+  2018 000019A9 0F853D040000                    jne L_error_arg_count_2
+  2019 000019AF 488B4520                        mov rax, PARAM(0)
+  2020                                          assert_pair(rax)
+    53 000019B3 803821              <1>  cmp byte [%1], %2
+    54 000019B6 0F85CF040000        <1>  jne L_error_incorrect_type
+  2021 000019BC 488B5D28                        mov rbx, PARAM(1)
+  2022 000019C0 48895809                        mov SOB_PAIR_CDR(rax), rbx
+  2023 000019C4 48B8-                           mov rax, sob_void
+  2023 000019C6 [0000000000000000] 
+  2024 000019CE C9                              leave
+  2025 000019CF C22000                          ret AND_KILL_FRAME(2)
+  2026                                  
+  2027                                  L_code_ptr_string_ref:
+  2028 000019D2 C8000000                        enter 0, 0
+  2029 000019D6 48837D1802                      cmp COUNT, 2
+  2030 000019DB 0F850B040000                    jne L_error_arg_count_2
+  2031 000019E1 488B7D20                        mov rdi, PARAM(0)
+  2032                                          assert_string(rdi)
+    53 000019E5 803F03              <1>  cmp byte [%1], %2
+    54 000019E8 0F859D040000        <1>  jne L_error_incorrect_type
+  2033 000019EE 488B7528                        mov rsi, PARAM(1)
+  2034                                          assert_integer(rsi)
+    53 000019F2 803E11              <1>  cmp byte [%1], %2
+    54 000019F5 0F8590040000        <1>  jne L_error_incorrect_type
+  2035 000019FB 488B5701                        mov rdx, qword [rdi + 1]
+  2036 000019FF 488B4E01                        mov rcx, qword [rsi + 1]
+  2037 00001A03 4839D1                          cmp rcx, rdx
+  2038 00001A06 0F8D14030000                    jge L_error_integer_range
+  2039 00001A0C 4883F900                        cmp rcx, 0
+  2040 00001A10 0F8C0A030000                    jl L_error_integer_range
+  2041 00001A16 8A5C3909                        mov bl, byte [rdi + 1 + 8 + 1 * rcx]
+  2042 00001A1A BF02000000                      mov rdi, 2
+  2043 00001A1F E865E7FFFF                      call malloc
+  2044 00001A24 C60002                          mov byte [rax], T_char
+  2045 00001A27 885801                          mov byte [rax + 1], bl
+  2046 00001A2A C9                              leave
+  2047 00001A2B C22000                          ret AND_KILL_FRAME(2)
+  2048                                  
+  2049                                  L_code_ptr_vector_ref:
+  2050 00001A2E C8000000                        enter 0, 0
+  2051 00001A32 48837D1802                      cmp COUNT, 2
+  2052 00001A37 0F85AF030000                    jne L_error_arg_count_2
+  2053 00001A3D 488B7D20                        mov rdi, PARAM(0)
+  2054                                          assert_vector(rdi)
+    53 00001A41 803F22              <1>  cmp byte [%1], %2
+    54 00001A44 0F8541040000        <1>  jne L_error_incorrect_type
+  2055 00001A4A 488B7528                        mov rsi, PARAM(1)
+  2056                                          assert_integer(rsi)
+    53 00001A4E 803E11              <1>  cmp byte [%1], %2
+    54 00001A51 0F8534040000        <1>  jne L_error_incorrect_type
+  2057 00001A57 488B5701                        mov rdx, qword [rdi + 1]
+  2058 00001A5B 488B4E01                        mov rcx, qword [rsi + 1]
+  2059 00001A5F 4839D1                          cmp rcx, rdx
+  2060 00001A62 0F8DB8020000                    jge L_error_integer_range
+  2061 00001A68 4883F900                        cmp rcx, 0
+  2062 00001A6C 0F8CAE020000                    jl L_error_integer_range
+  2063 00001A72 488B44CF09                      mov rax, [rdi + 1 + 8 + 8 * rcx]
+  2064 00001A77 C9                              leave
+  2065 00001A78 C22000                          ret AND_KILL_FRAME(2)
+  2066                                  
+  2067                                  L_code_ptr_vector_set:
+  2068 00001A7B C8000000                        enter 0, 0
+  2069 00001A7F 48837D1803                      cmp COUNT, 3
+  2070 00001A84 0F85CC030000                    jne L_error_arg_count_3
+  2071 00001A8A 488B7D20                        mov rdi, PARAM(0)
+  2072                                          assert_vector(rdi)
+    53 00001A8E 803F22              <1>  cmp byte [%1], %2
+    54 00001A91 0F85F4030000        <1>  jne L_error_incorrect_type
+  2073 00001A97 488B7528                        mov rsi, PARAM(1)
+  2074                                          assert_integer(rsi)
+    53 00001A9B 803E11              <1>  cmp byte [%1], %2
+    54 00001A9E 0F85E7030000        <1>  jne L_error_incorrect_type
+  2075 00001AA4 488B5701                        mov rdx, qword [rdi + 1]
+  2076 00001AA8 488B4E01                        mov rcx, qword [rsi + 1]
+  2077 00001AAC 4839D1                          cmp rcx, rdx
+  2078 00001AAF 0F8D6B020000                    jge L_error_integer_range
+  2079 00001AB5 4883F900                        cmp rcx, 0
+  2080 00001AB9 0F8C61020000                    jl L_error_integer_range
+  2081 00001ABF 488B4530                        mov rax, PARAM(2)
+  2082 00001AC3 488944CF09                      mov qword [rdi + 1 + 8 + 8 * rcx], rax
+  2083 00001AC8 48B8-                           mov rax, sob_void
+  2083 00001ACA [0000000000000000] 
+  2084 00001AD2 C9                              leave
+  2085 00001AD3 C22800                          ret AND_KILL_FRAME(3)
+  2086                                  
+  2087                                  L_code_ptr_string_set:
+  2088 00001AD6 C8000000                        enter 0, 0
+  2089 00001ADA 48837D1803                      cmp COUNT, 3
+  2090 00001ADF 0F8571030000                    jne L_error_arg_count_3
+  2091 00001AE5 488B7D20                        mov rdi, PARAM(0)
+  2092                                          assert_string(rdi)
+    53 00001AE9 803F03              <1>  cmp byte [%1], %2
+    54 00001AEC 0F8599030000        <1>  jne L_error_incorrect_type
+  2093 00001AF2 488B7528                        mov rsi, PARAM(1)
+  2094                                          assert_integer(rsi)
+    53 00001AF6 803E11              <1>  cmp byte [%1], %2
+    54 00001AF9 0F858C030000        <1>  jne L_error_incorrect_type
+  2095 00001AFF 488B5701                        mov rdx, qword [rdi + 1]
+  2096 00001B03 488B4E01                        mov rcx, qword [rsi + 1]
+  2097 00001B07 4839D1                          cmp rcx, rdx
+  2098 00001B0A 0F8D10020000                    jge L_error_integer_range
+  2099 00001B10 4883F900                        cmp rcx, 0
+  2100 00001B14 0F8C06020000                    jl L_error_integer_range
+  2101 00001B1A 488B4530                        mov rax, PARAM(2)
+  2102                                          assert_char(rax)
+    53 00001B1E 803802              <1>  cmp byte [%1], %2
+    54 00001B21 0F8564030000        <1>  jne L_error_incorrect_type
+  2103 00001B27 8A4001                          mov al, byte [rax + 1]
+  2104 00001B2A 88443909                        mov byte [rdi + 1 + 8 + 1 * rcx], al
+  2105 00001B2E 48B8-                           mov rax, sob_void
+  2105 00001B30 [0000000000000000] 
+  2106 00001B38 C9                              leave
+  2107 00001B39 C22800                          ret AND_KILL_FRAME(3)
+  2108                                  
+  2109                                  L_code_ptr_make_vector:
+  2110 00001B3C C8000000                        enter 0, 0
+  2111 00001B40 48837D1802                      cmp COUNT, 2
+  2112 00001B45 0F85A1020000                    jne L_error_arg_count_2
+  2113 00001B4B 488B4D20                        mov rcx, PARAM(0)
+  2114                                          assert_integer(rcx)
+    53 00001B4F 803911              <1>  cmp byte [%1], %2
+    54 00001B52 0F8533030000        <1>  jne L_error_incorrect_type
+  2115 00001B58 488B4901                        mov rcx, qword [rcx + 1]
+  2116 00001B5C 4883F900                        cmp rcx, 0
+  2117 00001B60 0F8CBA010000                    jl L_error_integer_range
+  2118 00001B66 488B5528                        mov rdx, PARAM(1)
+  2119 00001B6A 488D3CCD09000000                lea rdi, [1 + 8 + 8 * rcx]
+  2120 00001B72 E812E6FFFF                      call malloc
+  2121 00001B77 C60022                          mov byte [rax], T_vector
+  2122 00001B7A 48894801                        mov qword [rax + 1], rcx
+  2123 00001B7E 41B800000000                    mov r8, 0
+  2124                                  .L0:
+  2125 00001B84 4939C8                          cmp r8, rcx
+  2126 00001B87 740A                            je .L1
+  2127 00001B89 4A8954C009                      mov qword [rax + 1 + 8 + 8 * r8], rdx
+  2128 00001B8E 49FFC0                          inc r8
+  2129 00001B91 EBF1                            jmp .L0
+  2130                                  .L1:
+  2131 00001B93 C9                              leave
+  2132 00001B94 C22000                          ret AND_KILL_FRAME(2)
+  2133                                          
+  2134                                  L_code_ptr_make_string:
+  2135 00001B97 C8000000                        enter 0, 0
+  2136 00001B9B 48837D1802                      cmp COUNT, 2
+  2137 00001BA0 0F8546020000                    jne L_error_arg_count_2
+  2138 00001BA6 488B4D20                        mov rcx, PARAM(0)
+  2139                                          assert_integer(rcx)
+    53 00001BAA 803911              <1>  cmp byte [%1], %2
+    54 00001BAD 0F85D8020000        <1>  jne L_error_incorrect_type
+  2140 00001BB3 488B4901                        mov rcx, qword [rcx + 1]
+  2141 00001BB7 4883F900                        cmp rcx, 0
+  2142 00001BBB 0F8C5F010000                    jl L_error_integer_range
+  2143 00001BC1 488B5528                        mov rdx, PARAM(1)
+  2144                                          assert_char(rdx)
+    53 00001BC5 803A02              <1>  cmp byte [%1], %2
+    54 00001BC8 0F85BD020000        <1>  jne L_error_incorrect_type
+  2145 00001BCE 8A5201                          mov dl, byte [rdx + 1]
+  2146 00001BD1 488D7909                        lea rdi, [1 + 8 + 1 * rcx]
+  2147 00001BD5 E8AFE5FFFF                      call malloc
+  2148 00001BDA C60003                          mov byte [rax], T_string
+  2149 00001BDD 48894801                        mov qword [rax + 1], rcx
+  2150 00001BE1 41B800000000                    mov r8, 0
+  2151                                  .L0:
+  2152 00001BE7 4939C8                          cmp r8, rcx
+  2153 00001BEA 740A                            je .L1
+  2154 00001BEC 4188540009                      mov byte [rax + 1 + 8 + 1 * r8], dl
+  2155 00001BF1 49FFC0                          inc r8
+  2156 00001BF4 EBF1                            jmp .L0
+  2157                                  .L1:
+  2158 00001BF6 C9                              leave
+  2159 00001BF7 C22000                          ret AND_KILL_FRAME(2)
+  2160                                  
+  2161                                  L_code_ptr_numerator:
+  2162 00001BFA C8000000                        enter 0, 0
+  2163 00001BFE 48837D1801                      cmp COUNT, 1
+  2164 00001C03 0F85AE010000                    jne L_error_arg_count_1
+  2165 00001C09 488B4520                        mov rax, PARAM(0)
+  2166                                          assert_fraction(rax)
+    53 00001C0D 803812              <1>  cmp byte [%1], %2
+    54 00001C10 0F8575020000        <1>  jne L_error_incorrect_type
+  2167 00001C16 488B7801                        mov rdi, qword [rax + 1]
+  2168 00001C1A E8E7000000                      call make_integer
+  2169 00001C1F C9                              leave
+  2170 00001C20 C21800                          ret AND_KILL_FRAME(1)
+  2171                                          
+  2172                                  L_code_ptr_denominator:
+  2173 00001C23 C8000000                        enter 0, 0
+  2174 00001C27 48837D1801                      cmp COUNT, 1
+  2175 00001C2C 0F8585010000                    jne L_error_arg_count_1
+  2176 00001C32 488B4520                        mov rax, PARAM(0)
+  2177                                          assert_fraction(rax)
+    53 00001C36 803812              <1>  cmp byte [%1], %2
+    54 00001C39 0F854C020000        <1>  jne L_error_incorrect_type
+  2178 00001C3F 488B7809                        mov rdi, qword [rax + 1 + 8]
+  2179 00001C43 E8BE000000                      call make_integer
+  2180 00001C48 C9                              leave
+  2181 00001C49 C21800                          ret AND_KILL_FRAME(1)
+  2182                                  
+  2183                                  L_code_ptr_is_eq:
+  2184 00001C4C C8000000                	enter 0, 0
+  2185 00001C50 48837D1802              	cmp COUNT, 2
+  2186 00001C55 0F8591010000            	jne L_error_arg_count_2
+  2187 00001C5B 488B7D20                	mov rdi, PARAM(0)
+  2188 00001C5F 488B7528                	mov rsi, PARAM(1)
+  2189 00001C63 4839F7                  	cmp rdi, rsi
+  2190 00001C66 746C                    	je .L_eq_true
+  2191 00001C68 8A17                    	mov dl, byte [rdi]
+  2192 00001C6A 3A16                    	cmp dl, byte [rsi]
+  2193 00001C6C 7572                    	jne .L_eq_false
+  2194 00001C6E 80FA02                  	cmp dl, T_char
+  2195 00001C71 7459                    	je .L_char
+  2196 00001C73 80FA41                  	cmp dl, T_interned_symbol
+  2197 00001C76 7440                    	je .L_interned_symbol
+  2198 00001C78 80FA42                          cmp dl, T_uninterned_symbol
+  2199 00001C7B 7443                            je .L_uninterned_symbol
+  2200 00001C7D 80FA13                  	cmp dl, T_real
+  2201 00001C80 742E                    	je .L_real
+  2202 00001C82 80FA12                  	cmp dl, T_fraction
+  2203 00001C85 7413                    	je .L_fraction
+  2204 00001C87 80FA11                          cmp dl, T_integer
+  2205 00001C8A 7402                            je .L_integer
+  2206 00001C8C EB52                    	jmp .L_eq_false
+  2207                                  .L_integer:
+  2208 00001C8E 488B4601                        mov rax, qword [rsi + 1]
+  2209 00001C92 483B4701                        cmp rax, qword [rdi + 1]
+  2210 00001C96 7548                            jne .L_eq_false
+  2211 00001C98 EB3A                            jmp .L_eq_true
+  2212                                  .L_fraction:
+  2213 00001C9A 488B4601                	mov rax, qword [rsi + 1]
+  2214 00001C9E 483B4701                	cmp rax, qword [rdi + 1]
+  2215 00001CA2 753C                    	jne .L_eq_false
+  2216 00001CA4 488B4609                	mov rax, qword [rsi + 1 + 8]
+  2217 00001CA8 483B4709                	cmp rax, qword [rdi + 1 + 8]
+  2218 00001CAC 7532                    	jne .L_eq_false
+  2219 00001CAE EB24                    	jmp .L_eq_true
+  2220                                  .L_real:
+  2221 00001CB0 488B4601                	mov rax, qword [rsi + 1]
+  2222 00001CB4 483B4701                	cmp rax, qword [rdi + 1]
+  2223                                  .L_interned_symbol:
+  2224                                  	; never reached, because interned_symbols are static!
+  2225                                  	; but I'm keeping it in case, I'll ever change
+  2226                                  	; the implementation
+  2227 00001CB8 488B4601                	mov rax, qword [rsi + 1]
+  2228 00001CBC 483B4701                	cmp rax, qword [rdi + 1]
+  2229                                  .L_uninterned_symbol:
+  2230 00001CC0 4C8B4701                        mov r8, qword [rdi + 1]
+  2231 00001CC4 4C3B4601                        cmp r8, qword [rsi + 1]
+  2232 00001CC8 7516                            jne .L_eq_false
+  2233 00001CCA EB08                            jmp .L_eq_true
+  2234                                  .L_char:
+  2235 00001CCC 8A5E01                  	mov bl, byte [rsi + 1]
+  2236 00001CCF 3A5F01                  	cmp bl, byte [rdi + 1]
+  2237 00001CD2 750C                    	jne .L_eq_false
+  2238                                  .L_eq_true:
+  2239 00001CD4 48B8-                   	mov rax, sob_boolean_true
+  2239 00001CD6 [0300000000000000] 
+  2240 00001CDE EB0A                    	jmp .L_eq_exit
+  2241                                  .L_eq_false:
+  2242 00001CE0 48B8-                   	mov rax, sob_boolean_false
+  2242 00001CE2 [0200000000000000] 
+  2243                                  .L_eq_exit:
+  2244 00001CEA C9                      	leave
+  2245 00001CEB C22000                  	ret AND_KILL_FRAME(2)
+  2246                                  
+  2247                                  make_real:
+  2248 00001CEE C8000000                        enter 0, 0
+  2249 00001CF2 BF09000000                      mov rdi, (1 + 8)
+  2250 00001CF7 E88DE4FFFF                      call malloc
+  2251 00001CFC C60013                          mov byte [rax], T_real
+  2252 00001CFF F20F114001                      movsd qword [rax + 1], xmm0
+  2253 00001D04 C9                              leave 
+  2254 00001D05 C3                              ret
+  2255                                          
+  2256                                  make_integer:
+  2257 00001D06 C8000000                        enter 0, 0
+  2258 00001D0A 4889FE                          mov rsi, rdi
+  2259 00001D0D BF09000000                      mov rdi, (1 + 8)
+  2260 00001D12 E872E4FFFF                      call malloc
+  2261 00001D17 C60011                          mov byte [rax], T_integer
+  2262 00001D1A 48897001                        mov qword [rax + 1], rsi
+  2263 00001D1E C9                              leave
+  2264 00001D1F C3                              ret
+  2265                                          
+  2266                                  L_error_integer_range:
+  2267 00001D20 488B3C25[00000000]              mov rdi, qword [stderr]
+  2268 00001D28 48BE-                           mov rsi, fmt_integer_range
+  2268 00001D2A [0C04000000000000] 
+  2269 00001D32 B800000000                      mov rax, 0
+  2270                                          ENTER
+    44 00001D37 C8000000            <1>  enter 0, 0
+    45 00001D3B 4883E4F0            <1>  and rsp, ~15
+  2271 00001D3F E8(00000000)                    call fprintf
+  2272                                          LEAVE
+    49 00001D44 C9                  <1>  leave
+  2273 00001D45 48C7C0FBFFFFFF                  mov rax, -5
+  2274 00001D4C E8(00000000)                    call exit
+  2275                                  
+  2276                                  L_error_arg_negative:
+  2277 00001D51 488B3C25[00000000]              mov rdi, qword [stderr]
+  2278 00001D59 48BE-                           mov rsi, fmt_arg_negative
+  2278 00001D5B [E402000000000000] 
+  2279 00001D63 B800000000                      mov rax, 0
+  2280                                          ENTER
+    44 00001D68 C8000000            <1>  enter 0, 0
+    45 00001D6C 4883E4F0            <1>  and rsp, ~15
+  2281 00001D70 E8(00000000)                    call fprintf
+  2282                                          LEAVE
+    49 00001D75 C9                  <1>  leave
+  2283 00001D76 48C7C0FDFFFFFF                  mov rax, -3
+  2284 00001D7D E8(00000000)                    call exit
+  2285                                  
+  2286                                  L_error_arg_count_0:
+  2287 00001D82 488B3C25[00000000]              mov rdi, qword [stderr]
+  2288 00001D8A 48BE-                           mov rsi, fmt_arg_count_0
+  2288 00001D8C [0A03000000000000] 
+  2289 00001D94 488B5518                        mov rdx, COUNT
+  2290 00001D98 B800000000                      mov rax, 0
+  2291                                          ENTER
+    44 00001D9D C8000000            <1>  enter 0, 0
+    45 00001DA1 4883E4F0            <1>  and rsp, ~15
+  2292 00001DA5 E8(00000000)                    call fprintf
+  2293                                          LEAVE
+    49 00001DAA C9                  <1>  leave
+  2294 00001DAB 48C7C0FDFFFFFF                  mov rax, -3
+  2295 00001DB2 E8(00000000)                    call exit
+  2296                                  
+  2297                                  L_error_arg_count_1:
+  2298 00001DB7 488B3C25[00000000]              mov rdi, qword [stderr]
+  2299 00001DBF 48BE-                           mov rsi, fmt_arg_count_1
+  2299 00001DC1 [3203000000000000] 
+  2300 00001DC9 488B5518                        mov rdx, COUNT
+  2301 00001DCD B800000000                      mov rax, 0
+  2302                                          ENTER
+    44 00001DD2 C8000000            <1>  enter 0, 0
+    45 00001DD6 4883E4F0            <1>  and rsp, ~15
+  2303 00001DDA E8(00000000)                    call fprintf
+  2304                                          LEAVE
+    49 00001DDF C9                  <1>  leave
+  2305 00001DE0 48C7C0FDFFFFFF                  mov rax, -3
+  2306 00001DE7 E8(00000000)                    call exit
+  2307                                  
+  2308                                  L_error_arg_count_2:
+  2309 00001DEC 488B3C25[00000000]              mov rdi, qword [stderr]
+  2310 00001DF4 48BE-                           mov rsi, fmt_arg_count_2
+  2310 00001DF6 [9803000000000000] 
+  2311 00001DFE 488B5518                        mov rdx, COUNT
+  2312 00001E02 B800000000                      mov rax, 0
+  2313                                          ENTER
+    44 00001E07 C8000000            <1>  enter 0, 0
+    45 00001E0B 4883E4F0            <1>  and rsp, ~15
+  2314 00001E0F E8(00000000)                    call fprintf
+  2315                                          LEAVE
+    49 00001E14 C9                  <1>  leave
+  2316 00001E15 48C7C0FDFFFFFF                  mov rax, -3
+  2317 00001E1C E8(00000000)                    call exit
+  2318                                  
+  2319                                  L_error_arg_count_12:
+  2320 00001E21 488B3C25[00000000]              mov rdi, qword [stderr]
+  2321 00001E29 48BE-                           mov rsi, fmt_arg_count_12
+  2321 00001E2B [5803000000000000] 
+  2322 00001E33 488B5518                        mov rdx, COUNT
+  2323 00001E37 B800000000                      mov rax, 0
+  2324                                          ENTER
+    44 00001E3C C8000000            <1>  enter 0, 0
+    45 00001E40 4883E4F0            <1>  and rsp, ~15
+  2325 00001E44 E8(00000000)                    call fprintf
+  2326                                          LEAVE
+    49 00001E49 C9                  <1>  leave
+  2327 00001E4A 48C7C0FDFFFFFF                  mov rax, -3
+  2328 00001E51 E8(00000000)                    call exit
+  2329                                  
+  2330                                  L_error_arg_count_3:
+  2331 00001E56 488B3C25[00000000]              mov rdi, qword [stderr]
+  2332 00001E5E 48BE-                           mov rsi, fmt_arg_count_3
+  2332 00001E60 [BF03000000000000] 
+  2333 00001E68 488B5518                        mov rdx, COUNT
+  2334 00001E6C B800000000                      mov rax, 0
+  2335                                          ENTER
+    44 00001E71 C8000000            <1>  enter 0, 0
+    45 00001E75 4883E4F0            <1>  and rsp, ~15
+  2336 00001E79 E8(00000000)                    call fprintf
+  2337                                          LEAVE
+    49 00001E7E C9                  <1>  leave
+  2338 00001E7F 48C7C0FDFFFFFF                  mov rax, -3
+  2339 00001E86 E8(00000000)                    call exit
+  2340                                          
+  2341                                  L_error_incorrect_type:
+  2342 00001E8B 488B3C25[00000000]              mov rdi, qword [stderr]
+  2343 00001E93 48BE-                           mov rsi, fmt_type
+  2343 00001E95 [E803000000000000] 
+  2344 00001E9D B800000000                      mov rax, 0
+  2345                                          ENTER
+    44 00001EA2 C8000000            <1>  enter 0, 0
+    45 00001EA6 4883E4F0            <1>  and rsp, ~15
+  2346 00001EAA E8(00000000)                    call fprintf
+  2347                                          LEAVE
+    49 00001EAF C9                  <1>  leave
+  2348 00001EB0 48C7C0FCFFFFFF                  mov rax, -4
+  2349 00001EB7 E8(00000000)                    call exit
+  2350                                  
+  2351                                  L_error_division_by_zero:
+  2352 00001EBC 488B3C25[00000000]              mov rdi, qword [stderr]
+  2353 00001EC4 48BE-                           mov rsi, fmt_division_by_zero
+  2353 00001EC6 [2904000000000000] 
+  2354 00001ECE B800000000                      mov rax, 0
+  2355                                          ENTER
+    44 00001ED3 C8000000            <1>  enter 0, 0
+    45 00001ED7 4883E4F0            <1>  and rsp, ~15
+  2356 00001EDB E8(00000000)                    call fprintf
+  2357                                          LEAVE
+    49 00001EE0 C9                  <1>  leave
+  2358 00001EE1 48C7C0F8FFFFFF                  mov rax, -8
+  2359 00001EE8 E8(00000000)                    call exit
+  2360                                  
+  2361                                  section .data
+  2362                                  gensym_count:
+  2363 000002D9 0000000000000000                dq 0
+  2364                                  fmt_char:
+  2365 000002E1 256300                          db `%c\0`
+  2366                                  fmt_arg_negative:
+  2367 000002E4 212121205468652061-             db `!!! The argument cannot be negative.\n\0`
+  2367 000002ED 7267756D656E742063-
+  2367 000002F6 616E6E6F7420626520-
+  2367 000002FF 6E656761746976652E-
+  2367 00000308 0A00               
+  2368                                  fmt_arg_count_0:
+  2369 0000030A 212121204578706563-             db `!!! Expecting zero arguments. Found %d\n\0`
+  2369 00000313 74696E67207A65726F-
+  2369 0000031C 20617267756D656E74-
+  2369 00000325 732E20466F756E6420-
+  2369 0000032E 25640A00           
+  2370                                  fmt_arg_count_1:
+  2371 00000332 212121204578706563-             db `!!! Expecting one argument. Found %d\n\0`
+  2371 0000033B 74696E67206F6E6520-
+  2371 00000344 617267756D656E742E-
+  2371 0000034D 20466F756E64202564-
+  2371 00000356 0A00               
+  2372                                  fmt_arg_count_12:
+  2373 00000358 212121204578706563-             db `!!! Expecting one required and one optional argument. Found %d\n\0`
+  2373 00000361 74696E67206F6E6520-
+  2373 0000036A 726571756972656420-
+  2373 00000373 616E64206F6E65206F-
+  2373 0000037C 7074696F6E616C2061-
+  2373 00000385 7267756D656E742E20-
+  2373 0000038E 466F756E642025640A-
+  2373 00000397 00                 
+  2374                                  fmt_arg_count_2:
+  2375 00000398 212121204578706563-             db `!!! Expecting two arguments. Found %d\n\0`
+  2375 000003A1 74696E672074776F20-
+  2375 000003AA 617267756D656E7473-
+  2375 000003B3 2E20466F756E642025-
+  2375 000003BC 640A00             
+  2376                                  fmt_arg_count_3:
+  2377 000003BF 212121204578706563-             db `!!! Expecting three arguments. Found %d\n\0`
+  2377 000003C8 74696E672074687265-
+  2377 000003D1 6520617267756D656E-
+  2377 000003DA 74732E20466F756E64-
+  2377 000003E3 2025640A00         
+  2378                                  fmt_type:
+  2379 000003E8 2121212046756E6374-             db `!!! Function passed incorrect type\n\0`
+  2379 000003F1 696F6E207061737365-
+  2379 000003FA 6420696E636F727265-
+  2379 00000403 637420747970650A00 
+  2380                                  fmt_integer_range:
+  2381 0000040C 21212120496E636F72-             db `!!! Incorrect integer range\n\0`
+  2381 00000415 7265637420696E7465-
+  2381 0000041E 6765722072616E6765-
+  2381 00000427 0A00               
+  2382                                  fmt_division_by_zero:
+  2383 00000429 212121204469766973-             db `!!! Division by zero\n\0`
+  2383 00000432 696F6E206279207A65-
+  2383 0000043B 726F0A00           
+  2384                                  fmt_scheme_error_part_1:
+  2385 0000043F 0A2121212054686520-             db `\n!!! The procedure \0`
+  2385 00000448 70726F636564757265-
+  2385 00000451 2000               
+  2386                                  fmt_scheme_error_part_2:
+  2387 00000453 2061736B656420746F-             db ` asked to terminate the program\n`
+  2387 0000045C 207465726D696E6174-
+  2387 00000465 65207468652070726F-
+  2387 0000046E 6772616D0A         
+  2388 00000473 202020207769746820-             db `    with the following message:\n\n\0`
+  2388 0000047C 74686520666F6C6C6F-
+  2388 00000485 77696E67206D657373-
+  2388 0000048E 6167653A0A0A00     
+  2389                                  fmt_scheme_error_part_3:
+  2390 00000495 0A0A476F6F64627965-             db `\n\nGoodbye!\n\n\0`
+  2390 0000049E 210A0A00           

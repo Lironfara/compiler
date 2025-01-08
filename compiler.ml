@@ -1621,9 +1621,28 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       ("return", "L_code_ptr_return");*)
     ];;  
 
+    (*- : expr' =
+ScmLambda' ([], Simple,
+ ScmApplic'
+  (ScmApplic' (ScmVarGet' (Var' ("+", Free)),
+    [ScmVarGet' (Var' ("x", Free)); ScmConst' (ScmNumber (ScmInteger 1))],
+    Tail_Call),
+  [], Tail_Call))*)
+    (* ScmApplic' of expr' * expr' list * app_kind;;*)
+
   let collect_constants =
     let rec run = function
-    | ScmConst' (sexp) -> [sexp] 
+    | ScmConst' (expr') -> [expr']
+    | ScmLambda' (params, lambda_type, exprs') -> runs [exprs']
+    | ScmApplic'(proc, arguments, app_kind) -> runs arguments
+    | ScmVarDef' (var, expr') -> (run expr')
+    | ScmVarSet' (var, expr') -> (run expr')
+    | ScmBoxSet' (var, expr')-> (run expr')
+    | ScmOr'(exprs')->List.flatten (List.map run exprs')
+    | ScmVarGet' (Var' (v, Free)) -> [ScmString v]
+    | ScmIf' (test', dit', dif') -> run test' @ run dit' @ run dif'
+    | ScmSeq' (exprs') -> List.flatten (List.map run exprs')
+    | _ -> []
     and runs exprs' =
       List.fold_left (fun consts expr' -> consts @ (run expr')) [] exprs'
     in
@@ -1640,6 +1659,7 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       | ScmSymbol sym -> [ScmString sym; ScmSymbol sym]
       | ScmPair (car, cdr) -> (run car) @ (run cdr) @ [sexpr]
       | ScmVector sexprs -> (runs sexprs) @ [sexpr]
+      |_ -> []
     and runs sexprs =
       List.fold_left (fun full sexpr -> full @ (run sexpr)) [] sexprs
     in fun exprs' ->
@@ -1784,13 +1804,33 @@ ScmLambda' (["a"; "b"], Simple,
   (*ScmLambda' of string list * lambda_kind * expr'*)
 
   (*Needs to return list of string*)
+
+  (*| ScmConst' (expr') -> [expr']
+    | ScmLambda' (params, lambda_type, exprs') -> runs [exprs']
+    | ScmApplic'(proc, arguments, app_kind) -> runs arguments
+    | ScmVarDef' (var, expr') -> (run expr')
+    | ScmVarSet' (var, expr') -> (run expr')
+    | ScmBoxSet' (var, expr')-> (run expr')
+    | ScmOr'(exprs')->List.flatten (List.map run exprs')
+    | ScmVarGet' (Var' (v, Free)) -> [ScmString v]
+    | ScmIf' (test', dit', dif') -> run test' @ run dit' @ run dif'
+    | ScmSeq' (exprs') -> List.flatten (List.map run exprs')
+    | _ -> []*)
+  
+  
+  
   let collect_free_vars =
     let rec run = function
       | ScmVarGet'(Var'(name, Free)) -> [name]
+      | ScmVarSet'(Var'(name, Free), expr) -> [name]@(runs [expr])
       | ScmApplic' (expr', exprs', app_kind) ->
         let all_list = expr' :: exprs' in
         List.flatten (List.map run all_list)
       | ScmLambda' (params, lambda_type, expr') -> run expr'
+      | ScmIf' (test', dit', dif') -> run test' @ run dit' @ run dif'
+      | ScmOr'(exprs')->List.flatten (List.map run exprs')
+      | ScmBoxSet' (var, expr')-> (run expr')
+      | ScmSeq' (exprs') -> List.flatten (List.map run exprs')
       | _ -> []
     and runs exprs' =
       List.fold_left
@@ -1938,8 +1978,9 @@ ScmLambda' (["a"; "b"], Simple,
       | ScmOr' exprs' ->
          raise (X_not_yet_implemented "final project")
       | ScmVarSet' (Var' (v, Free), expr') ->
-          let expr_code = run params env expr' in
-          let lexical_add = search_free_var_table v free_vars in
+        Printf.printf "I am here!\n";
+          let expr_code = run params env expr' 
+          and lexical_add = search_free_var_table v free_vars in
           expr_code
           ^(Printf.sprintf "\tmov qword [%s], rax\n" lexical_add)
           ^(Printf.sprintf "\tmov rax, sob_void\n")
