@@ -10,7 +10,10 @@
  * (3) Support for entering the literal void-object: #void
  *)
 
- #use "pc.ml";;
+#use "pc.ml";;
+#print_depth 100000;;
+#print_length 100000;;
+
 
  exception X_not_yet_implemented of string;;
  exception X_this_should_not_happen of string;;
@@ -1668,21 +1671,25 @@ module Code_Generation (* : CODE_GENERATION *) = struct
     | ScmChar ch ->
        ([RTTI "T_char"; Byte (int_of_char ch)], 2)
     | ScmString str ->
-       (([RTTI "T_string"; Quad (String.length str); ASCII str], 9 + (String.length str)))
+       (([RTTI "T_string"; Quad (String.length str); ASCII str], 1 + word_size + (String.length str)))
     | ScmSymbol sym ->
        let addr = search_constant_address (ScmString sym) table in
-       ([RTTI "T_interned_symbol"; ConstPtr addr], 1 + word_size)
+       ([RTTI "T_interned_symbol"; ConstPtr addr], 1 + word_size) (*set to 8*)
     | ScmNumber (ScmInteger n) ->
        ([RTTI "T_integer"; Quad n], 1 + word_size)
     | ScmNumber (ScmFraction (numerator, denominator)) ->
-      ([RTTI "T_fraction"; Quad numerator; Quad denominator] , 1 + 2* word_size)
+      ([RTTI "T_fraction"; Quad numerator; Quad denominator] , 1 + 2 * word_size)
     | ScmNumber (ScmReal x) ->
        ([RTTI "T_real"; QuadFloat x], 1 + word_size)
     | ScmVector s -> (*#(() #t #f*)
       let addrs = List.map (fun element_in_vector -> ConstPtr(search_constant_address element_in_vector table)) s in
+      (*for each element in the vector we search for it in the constant table*)
       ([RTTI "T_vector"; Quad (List.length addrs)] @ addrs, word_size + 1 + word_size * (List.length addrs))
+      (*we insert the ConstPtr to the length of the vector*)
     | ScmPair (car, cdr) ->
-       raise (X_not_yet_implemented "final project");;
+        let car_addr = ConstPtr (search_constant_address car table) in
+        let cdr_addr =  ConstPtr (search_constant_address cdr table) in
+        ([RTTI "T_pair"; car_addr; cdr_addr ], 1 + 2*word_size)
 
   let make_constants_table =
     let rec run table loc = function
@@ -1765,9 +1772,26 @@ module Code_Generation (* : CODE_GENERATION *) = struct
     Printf.sprintf "%s:\n%s"
       label_start_of_constants_table (run table);;
 
+
+  (*sem "(lambda (a b) (+ a b c))";;
+- : expr' =
+ScmLambda' (["a"; "b"], Simple,
+ ScmApplic' (ScmVarGet' (Var' ("+", Free)),
+  [ScmVarGet' (Var' ("a", Param 0)); ScmVarGet' (Var' ("b", Param 1));
+   ScmVarGet' (Var' ("c", Free))],
+  Tail_Call*)
+  (* ScmApplic' of expr' * expr' list * app_kind;;*)
+  (*ScmLambda' of string list * lambda_kind * expr'*)
+
+  (*Needs to return list of string*)
   let collect_free_vars =
     let rec run = function
-      | _ -> raise (X_not_yet_implemented "final project")
+      | ScmVarGet'(Var'(name, Free)) -> [name]
+      | ScmApplic' (expr', exprs', app_kind) ->
+        let all_list = expr' :: exprs' in
+        List.flatten (List.map run all_list)
+      | ScmLambda' (params, lambda_type, expr') -> run expr'
+      | _ -> []
     and runs exprs' =
       List.fold_left
         (fun vars expr' -> vars @ (run expr'))
@@ -1887,9 +1911,10 @@ module Code_Generation (* : CODE_GENERATION *) = struct
          ^ "\tje L_error_fvar_undefined\n"
       | ScmVarGet' (Var' (v, Param minor)) ->
          Printf.sprintf "\tmov rax, PARAM(%d)\t; param %s\n"
-           minor v
+           minor v (*mov rax, qword [rbp + 8 ∗ (4 + minor)]*)
+           (*%define PARAM(n) qword [rbp + 8 * (4 + n)]*)
       | ScmVarGet' (Var' (v, Bound (major, minor))) ->
-         "\tmov rax, ENV\n"
+         "\tmov rax, ENV\n" (*%define ENV qword [rbp + 8 * 2]*)
          ^ (Printf.sprintf "\tmov rax, qword [rax + 8 * %d]\n" major)
          ^ (Printf.sprintf
               "\tmov rax, qword [rax + 8 * %d]\t; bound var %s\n" minor v)
@@ -1913,13 +1938,29 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       | ScmOr' exprs' ->
          raise (X_not_yet_implemented "final project")
       | ScmVarSet' (Var' (v, Free), expr') ->
-         raise (X_not_yet_implemented "final project")
+          let expr_code = run params env expr' in
+          let lexical_add = search_free_var_table v free_vars in
+          expr_code
+          ^(Printf.sprintf "\tmov qword [%s], rax\n" lexical_add)
+          ^(Printf.sprintf "\tmov rax, sob_void\n")
+          
       | ScmVarSet' (Var' (v, Param minor), ScmBox' _) ->
          raise (X_not_yet_implemented "final project")
+
       | ScmVarSet' (Var' (v, Param minor), expr') ->
-         raise (X_not_yet_implemented "final project")
+         let expr_code = run params env expr' in
+         expr_code
+         ^(Printf.sprintf "\tmov PARAM(%d), rax\t; \n" minor) (*(*%define PARAM(n) qword [rbp + 8 * (4 + n)]*)*)
+         ^(Printf.sprintf "\tmov rax, sob_void\n")
+
       | ScmVarSet' (Var' (v, Bound (major, minor)), expr') ->
-         raise (X_not_yet_implemented "final project")
+         let expr_code = run params env expr' in
+         expr_code
+         ^(Printf.sprintf "\tmov rbx, ENV\n")
+         ^(Printf.sprintf "\t mov rbx, qword [rbx + 8*%d]\n" major)
+         ^(Printf.sprintf "\tmov qword [rbx + 8*%d], rax\n" minor)
+         ^(Printf.sprintf "\tmov rax, sob_void\n")
+
       | ScmVarDef' (Var' (v, Free), expr') ->
          let label = search_free_var_table v free_vars in
          (run params env expr')
@@ -2058,6 +2099,8 @@ module Code_Generation (* : CODE_GENERATION *) = struct
     let asm_code = code_gen exprs' in
     (string_to_file file_out asm_code;
      Printf.printf "!!! Compilation finished. Time to assemble!\n");;  
+
+     
 
   let compile_scheme_file file_in file_out =
     compile_scheme_string file_out (file_to_string file_in);;
