@@ -1636,7 +1636,7 @@ ScmLambda' ([], Simple,
     | ScmLambda' (params, lambda_type, exprs') -> runs [exprs']
     | ScmApplic'(proc, arguments, app_kind) -> runs arguments
     | ScmVarDef' (var, expr') -> (run expr')
-    | ScmVarSet' (var, expr') -> (run expr')
+    | ScmVarSet' (Var' (v, Free), expr') -> [ScmString v] @ (run expr')
     | ScmBoxSet' (var, expr')-> (run expr')
     | ScmOr'(exprs')->List.flatten (List.map run exprs')
     | ScmVarGet' (Var' (v, Free)) -> [ScmString v]
@@ -1696,7 +1696,7 @@ ScmLambda' ([], Simple,
        let addr = search_constant_address (ScmString sym) table in
        ([RTTI "T_interned_symbol"; ConstPtr addr], 1 + word_size) (*set to 8*)
     | ScmNumber (ScmInteger n) ->
-       ([RTTI "T_integer"; Quad n], 1 + word_size)
+      ([RTTI "T_integer"; Quad n], 1 + word_size)
     | ScmNumber (ScmFraction (numerator, denominator)) ->
       ([RTTI "T_fraction"; Quad numerator; Quad denominator] , 1 + 2 * word_size)
     | ScmNumber (ScmReal x) ->
@@ -1816,8 +1816,6 @@ ScmLambda' (["a"; "b"], Simple,
     | ScmIf' (test', dit', dif') -> run test' @ run dit' @ run dif'
     | ScmSeq' (exprs') -> List.flatten (List.map run exprs')
     | _ -> []*)
-  
-  
   
   let collect_free_vars =
     let rec run = function
@@ -1941,8 +1939,8 @@ ScmLambda' (["a"; "b"], Simple,
     let rec run params env = function
       | ScmConst' sexpr ->
          let addr = search_constant_address sexpr consts in
-         Printf.sprintf "\tmov rax, L_constants + %d\n" addr
-      | ScmVarGet' (Var' (v, Free)) ->
+        Printf.sprintf "\tmov rax, L_constants + %d\n" addr 
+        | ScmVarGet' (Var' (v, Free)) ->
          let label = search_free_var_table v free_vars in
          (Printf.sprintf
             "\tmov rax, qword [%s]\t; free var %s\n"
@@ -1978,8 +1976,7 @@ ScmLambda' (["a"; "b"], Simple,
       | ScmOr' exprs' ->
          raise (X_not_yet_implemented "final project")
       | ScmVarSet' (Var' (v, Free), expr') ->
-        Printf.printf "I am here!\n";
-          let expr_code = run params env expr' 
+          let expr_code = run params env expr'
           and lexical_add = search_free_var_table v free_vars in
           expr_code
           ^(Printf.sprintf "\tmov qword [%s], rax\n" lexical_add)
