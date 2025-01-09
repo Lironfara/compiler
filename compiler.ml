@@ -1635,7 +1635,7 @@ ScmLambda' ([], Simple,
     | ScmConst' (expr') -> [expr']
     | ScmLambda' (params, lambda_type, exprs') -> runs [exprs']
     | ScmApplic'(proc, arguments, app_kind) -> runs arguments
-    | ScmVarDef' (var, expr') -> (run expr')
+    | ScmVarDef' (Var' (v, Free), expr') -> [ScmString v] @ (run expr')
     | ScmVarSet' (Var' (v, Free), expr') -> [ScmString v] @ (run expr')
     | ScmBoxSet' (var, expr')-> (run expr')
     | ScmOr'(exprs')->List.flatten (List.map run exprs')
