@@ -93,15 +93,20 @@ L_constants:
 	; L_constants + 4:
 	db T_char, 0x00	; #\nul
 	; L_constants + 6:
-	db T_string	; "return"
-	dq 6
-	db 0x72, 0x65, 0x74, 0x75, 0x72, 0x6E
-	; L_constants + 21:
+	db T_string	; "+"
+	dq 1
+	db 0x2B
+	; L_constants + 16:
 	db T_integer	; 1
 	dq 1
-	; L_constants + 30:
+	; L_constants + 25:
 	db T_integer	; 2
 	dq 2
+free_var_0:	; location of +
+	dq .undefined_object
+.undefined_object:
+	db T_undefined
+	dq L_constants + 6
 
 
 extern printf, fprintf, stdout, stderr, fwrite, exit, putchar, getchar
@@ -114,11 +119,19 @@ main:
         push Lend
         enter 0, 0
 
-	mov rax, L_constants + 21
-	cmp rax, sob_boolean_false
-	jne .L_or_end_0001
-	mov rax, L_constants + 30
-	.L_or_end_0002:
+	; preparing a non-tail-call
+	mov rax, L_constants + 25
+	push rax
+	mov rax, L_constants + 16
+	push rax
+	push 2	; arg count
+	mov rax, qword [free_var_0]	; free var +
+	cmp byte [rax], T_undefined
+	je L_error_fvar_undefined
+	cmp byte [rax], T_closure
+	jne L_error_non_closure
+	push SOB_CLOSURE_ENV(rax)
+	call SOB_CLOSURE_CODE(rax)
 Lend:
 	mov rdi, rax
 	call print_sexpr_if_not_void
