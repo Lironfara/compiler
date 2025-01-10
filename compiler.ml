@@ -1979,16 +1979,19 @@ ScmLambda' (["a"; "b"], Simple,
       | ScmOr' exprs' ->
         let exit_code = make_or_end () in
         (match exprs' with 
-        |expr'::[] ->let code_expr = run params env expr' in
-        code_expr
-        ^(Printf.sprintf "\t%s:\n" exit_code)
-        | expr':: rest -> 
+        | expr'::[] ->
           let code_expr = run params env expr' in
           code_expr
+          ^(Printf.sprintf "%s:\n" exit_code) (*Error: This expression has type string but an expression was expected of type bool*)
+        | expr':: rest -> 
+          let code_expr = run params env expr' in
+          let exit_here = exit_code in
+          code_expr
           ^ (Printf.sprintf "\tcmp rax, sob_boolean_false\n")
-          ^ (Printf.sprintf "\tjne %s\n" exit_code)
+          ^ (Printf.sprintf "\tjne %s\n" exit_here)
           ^ run params env (ScmOr' rest)
-        | [] -> Printf.sprintf "%s\n" exit_code)
+          ^ (Printf.sprintf "%s:\n" exit_here)
+        | [] -> Printf.sprintf "%s:\n" exit_code)
 
       | ScmVarSet' (Var' (v, Free), expr') ->
           let expr_code = run params env expr'
@@ -1998,7 +2001,9 @@ ScmLambda' (["a"; "b"], Simple,
           ^(Printf.sprintf "\tmov rax, sob_void\n")
           
       | ScmVarSet' (Var' (v, Param minor), ScmBox' _) ->
-         raise (X_not_yet_implemented "final project")
+        let box_var_code = Printf.sprintf "\tmov rbx, qword [rbp + 8 * (4 + %d)]\n" minor in
+        let box_code = Printf.sprintf "\tmov qword [rbx], rax\n" in (*the new box adress will hold rbx value*)
+        box_var_code ^ box_code
 
       | ScmVarSet' (Var' (v, Param minor), expr') ->
          let expr_code = run params env expr' in
@@ -2027,8 +2032,16 @@ ScmLambda' (["a"; "b"], Simple,
       | ScmBoxGet' var' ->
          (run params env (ScmVarGet' var'))
          ^ "\tmov rax, qword [rax]\n"
-      | ScmBoxSet' (var', expr') ->
-         raise (X_not_yet_implemented "final project")
+      | ScmBoxSet' (var', expr') -> (*need to update the boxed value*)
+         let expr_code= run params env expr' in
+         let var_code = run params env (ScmVarGet' var') in
+         expr_code
+         ^ (Printf.sprintf "\tpush rax\n")
+         ^ var_code
+         ^ (Printf.sprintf "\tpop qword [rax]\n")
+         ^ (Printf.sprintf "\tmov rax, sob_void\n")
+         
+
       | ScmLambda' (params', Simple, body) ->
          let label_loop_env = make_lambda_simple_loop_env ()
          and label_loop_env_end = make_lambda_simple_loop_env_end ()
