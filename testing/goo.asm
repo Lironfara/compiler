@@ -158,8 +158,16 @@ main:
 	jmp L_error_incorrect_arity_opt
 .L_lambda_opt_arity_check_exact_0001:
 	sub rsp, 8
-	mov qword[rsp + 8 * 3], 2
-	mov qword[rsp + 8 * 4+ 8*2], sob_nil
+	mov rax, qword[rsp + 8 *1]
+	mov qword[rsp], rax
+	mov rax, qword[rsp + 8 *2]
+	mov qword[rsp + 1], rax
+	mov rax, 2
+	mov qword[rsp + 8 *2], rax
+	mov rax, qword[rsp + 8 * (4 + 0)]
+	mov qword[rsp + 8 * 3 + 0 * 8], rax
+	mov rax, sob_nil
+	mov qword[rsp + 8 * 4 + 8 * 2], rax
 	enter 0, 0
 	mov rax, PARAM(0)	; param a
 	leave
