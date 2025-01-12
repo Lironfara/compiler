@@ -2170,18 +2170,25 @@ ScmLambda' (["a"; "b"], Simple,
          ^ (Printf.sprintf "%s:\n" label_arity_exact) (*exect to the number of params - a*)
          (*add 1 argument*)
          ^"\tsub rsp, 8\n"
-         ^ (Printf.sprintf "\tmov rax, qword[rsp + 8 *1]\n")
-         ^ (Printf.sprintf "\tmov qword[rsp], rax\n") (*moving ret one down*)
-         ^ (Printf.sprintf "\tmov rax, qword[rsp + 8 *2]\n") (*moving env one down*)
-         ^ (Printf.sprintf "\tmov qword[rsp + 1], rax\n") (*moving ret one down*)
+
+         (*move ret down*)
+         ^ (Printf.sprintf "\tmov rax, qword[rsp + 8 *1]\n") 
+         ^ (Printf.sprintf "\tmov qword[rsp], rax  \n")
+
+          (*move env down*)
+         ^ (Printf.sprintf "\tmov rax, qword[rsp + 8 *2] ;rax now holds env \n") (*moving env one down*)
+         ^ (Printf.sprintf "\tmov qword[rsp + 8 * 1], rax\n") 
+
+         (*move count down*)
          ^ (Printf.sprintf "\tmov rax, %d\n" ((List.length params') + 1)) (*moving num of params one down - update for empty list added*)
          ^ (Printf.sprintf "\tmov qword[rsp + 8 *2], rax\n") (*moving env one down*)
+
          (*no need to copy the params, just adjst their location*)
          ^ (String.concat "\n" (List.mapi (fun i _ ->
-          Printf.sprintf "\tmov rax, qword[rsp + 8 * (4 + %d)]\n\tmov qword[rsp + 8 * 3 + %d * 8], rax\n" i i) params'))
+          Printf.sprintf "\tmov rax, qword[rsp + 8 * (4 + %d)]\n\tmov qword[rsp + 8 * (3 + %d)], rax\n" i i) params'))
 
         ^ (Printf.sprintf "\tmov rax, sob_nil\n") (*for nil*)
-         ^ (Printf.sprintf "\tmov qword[rsp + 8 * 4 + 8 * %d], rax\n" ((List.length params') + 1)) (*for nil*)
+         ^ (Printf.sprintf "\tmov qword[rsp + 8 * (3 + %d)], rax\n" (List.length params')) (*for nil*)
          (*pushing nil the the stack - making room using magic*)
          ^ "\tenter 0, 0\n"
          ^ (run ((List.length params') + 1) (env + 1) body)
