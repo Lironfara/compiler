@@ -2184,20 +2184,78 @@ ScmLambda' (["a"; "b"], Simple,
          ^ (Printf.sprintf "\tmov qword[rsp + 8 *2], rax\n") (*moving env one down*)
 
          (*no need to copy the params, just adjst their location*)
-         ^ (String.concat "\n" (List.mapi (fun i _ ->
+         ^ (String.concat "" (List.mapi (fun i _ ->
           Printf.sprintf "\tmov rax, qword[rsp + 8 * (4 + %d)]\n\tmov qword[rsp + 8 * (3 + %d)], rax\n" i i) params'))
 
-        ^ (Printf.sprintf "\tmov rax, sob_nil\n") (*for nil*)
+         ^ (Printf.sprintf "\tmov rax, sob_nil\n") (*for nil*)
          ^ (Printf.sprintf "\tmov qword[rsp + 8 * (3 + %d)], rax\n" (List.length params')) (*for nil*)
-         (*pushing nil the the stack - making room using magic*)
          ^ "\tenter 0, 0\n"
          ^ (run ((List.length params') + 1) (env + 1) body)
          ^ "\tleave\n"
          ^ (Printf.sprintf "\tret AND_KILL_FRAME(%d)\n" ((List.length params') + 1)) (*the number of arguments you need to remove from stack*)
-         ^ (Printf.sprintf "%s:\t; new closure is in rax\n" label_end)
+         ^ (Printf.sprintf "\tjmp %s\t; new closure is in rax\n" label_end)
+            
+        
          ^ (Printf.sprintf "%s:\n" label_arity_more)
+         ^ (Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*4*)
+         ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi = rax = 4*)
+         ^( Printf.sprintf "%s:\n" label_loop)
+         ^(Printf.sprintf"\tcmp rdi, %d\n" ((List.length params')))
+         ^( Printf.sprintf "\tje %s\n" label_loop_exit)
+         ^"\tmov rax, qword[rsp + 8 * (3 + rdi)]\n" 
+         ^"\tpush rax\n" 
+         ^"\tpush sob_nil\n" 
+         ^"\tcall L_code_ptr_cons\n" 
+         ^"\tadd rsp, 16\n"
+         ^"\tdec rdi\n"
+         ^( Printf.sprintf "\tjmp %s\n" label_loop)
+         ^(Printf.sprintf "%s:\n" label_loop_exit)
+          
+          ^(Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*6*)
+          ^(Printf.sprintf "\tmov rdi, %d\n" ((List.length params') + 1)) (*4*)
+          ^(Printf.sprintf "\tsub rax, rdi\n") (*2*)
+          ^(Printf.sprintf "\tmov rdi, rax\n")
+          ^ (Printf.sprintf "\timul rax,8\n")
+          ^ (Printf.sprintf "\tadd rsp, rax\n")
 
 
+
+           (*no need to copy the params, just adjst their location*)
+           ^ (String.concat "" (List.mapi (fun i _ ->
+            let index = (List.length params') - i - 1 in
+            Printf.sprintf "\tmov rbx, rdi\n\timul rbx, 8\n\tmov rax, qword[rsp + 8 * (3 + %d)]\n\tsub rax, rbx\n\tmov qword[rsp + 8 * (3 + %d)], rax\n" index index) params'))
+
+
+            ^ (Printf.sprintf "\tmov rax, rdi\n") (*2*)
+            ^ (Printf.sprintf "\timul rax, 8\n")
+            ^ (Printf.sprintf "\tsub rax, rsp\n")
+            ^ (Printf.sprintf "\tmov rdi, rax\n")
+            ^ (Printf.sprintf "\tadd rax, 8 * 2\n")
+            ^ (Printf.sprintf "\tmov qword [rax], %d\n" ((List.length params') + 1))
+         (*rdi will hold the number of bytes / 8 to add*)
+         
+
+           (*move env down*)
+           ^ (Printf.sprintf "\tmov rax, rdi\n")
+           ^ (Printf.sprintf "\tadd rax, 8 * 1\n")
+          ^ (Printf.sprintf "\tmov rax, qword[rax] ;rax now holds env \n") (*moving env one down*)
+          ^ (Printf.sprintf "\tmov qword[rsp + 8 * 1], rax\n") 
+ 
+          ^ (Printf.sprintf "\tmov rax, rdi\n")
+          (*move ret down*)
+          ^ (Printf.sprintf "\tmov rax, qword[rax]\n") 
+          ^ (Printf.sprintf "\tmov qword[rsp], rax\n")
+            
+
+          ^ "\tenter 0, 0\n"
+          ^ (run ((List.length params') + 1) (env + 1) body)
+          ^ "\tleave\n"
+          ^ (Printf.sprintf "\tret AND_KILL_FRAME(%d)\n" ((List.length params') + 1)) (*the number of arguments you need to remove from stack*)
+          ^ (Printf.sprintf "%s:\t; new closure is in rax\n" label_end)
+
+          (*for the case of more arguments*)
+
+       
         (* nil
          ----> oldFrame
          ----> n

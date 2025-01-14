@@ -102,6 +102,12 @@ L_constants:
 	; L_constants + 30:
 	db T_integer	; 2
 	dq 2
+	; L_constants + 39:
+	db T_integer	; 3
+	dq 3
+	; L_constants + 48:
+	db T_integer	; 4
+	dq 4
 
 
 extern printf, fprintf, stdout, stderr, fwrite, exit, putchar, getchar
@@ -169,17 +175,63 @@ main:
 	mov qword[rsp + 8 *2], rax
 	mov rax, qword[rsp + 8 * (4 + 0)]
 	mov qword[rsp + 8 * (3 + 0)], rax
-
 	mov rax, qword[rsp + 8 * (4 + 1)]
 	mov qword[rsp + 8 * (3 + 1)], rax
 	mov rax, sob_nil
 	mov qword[rsp + 8 * (3 + 2)], rax
 	enter 0, 0
-	mov rax, PARAM(2)	; param c
+	mov rax, L_constants + 21
+	leave
+	ret AND_KILL_FRAME(3)
+	jmp .L_lambda_opt_end_0004	; new closure is in rax
+.L_lambda_opt_arity_check_more_0004:
+	mov rax, qword[rsp + 2 * 8]
+	mov rdi, rax
+.L_lambda_opt_stack_shrink_loop_0004:
+	cmp rdi, 2
+	je .L_lambda_opt_stack_shrink_loop_exit_0004
+	mov rax, qword[rsp + 8 * (3 + rdi)]
+	push rax
+	push sob_nil
+	call L_code_ptr_cons
+	add rsp, 16
+	dec rdi
+	jmp .L_lambda_opt_stack_shrink_loop_0004
+.L_lambda_opt_stack_shrink_loop_exit_0004:
+	mov rax, qword[rsp + 2 * 8]
+	mov rdi, 3
+	sub rax, rdi
+	mov rdi, rax
+	imul rax,8
+	add rsp, rax
+	mov rbx, rdi
+	imul rbx, 8
+	mov rax, qword[rsp + 8 * (3 + 1)]
+	sub rax, rbx
+	mov qword[rsp + 8 * (3 + 1)], rax
+	mov rbx, rdi
+	imul rbx, 8
+	mov rax, qword[rsp + 8 * (3 + 0)]
+	sub rax, rbx
+	mov qword[rsp + 8 * (3 + 0)], rax
+	mov rax, rdi
+	imul rax, 8
+	sub rax, rsp
+	mov rdi, rax
+	add rax, 8 * 2
+	mov qword [rax], 3
+	mov rax, rdi
+	add rax, 8 * 1
+	mov rax, qword[rax] ;rax now holds env 
+	mov qword[rsp + 8 * 1], rax
+	mov rax, rdi
+	mov rax, qword[rax]
+	mov qword[rsp], rax
+	enter 0, 0
+	mov rax, L_constants + 21
 	leave
 	ret AND_KILL_FRAME(3)
 .L_lambda_opt_end_0004:	; new closure is in rax
-.L_lambda_opt_arity_check_more_0004:
 	push rax
 	push 1	; arg count
 	mov rdi, (1 + 8 + 8)	; sob closure
@@ -228,11 +280,15 @@ main:
 .L_lambda_simple_arity_check_ok_0004:
 	enter 0, 0
 	; preparing a non-tail-call
+	mov rax, L_constants + 48
+	push rax
+	mov rax, L_constants + 39
+	push rax
 	mov rax, L_constants + 30
 	push rax
 	mov rax, L_constants + 21
 	push rax
-	push 2	; arg count
+	push 4	; arg count
 	mov rax, PARAM(0)	; param f
 	cmp byte [rax], T_closure
 	jne L_error_non_closure
