@@ -2199,51 +2199,76 @@ ScmLambda' (["a"; "b"], Simple,
          ^ (Printf.sprintf "%s:\n" label_arity_more)
          ^ (Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*4*)
          ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi = rax = 4*)
-         ^( Printf.sprintf "%s:\n" label_loop)
-         ^(Printf.sprintf"\tcmp rdi, %d\n" ((List.length params')))
-         ^( Printf.sprintf "\tje %s\n" label_loop_exit)
-         ^"\tmov rax, qword[rsp + 8 * (3 + rdi)]\n" 
-         ^"\tpush rax\n" 
-         ^"\tpush sob_nil\n" 
-         ^"\tcall L_code_ptr_cons\n" 
-         ^"\tadd rsp, 16\n"
-         ^"\tdec rdi\n"
+         ^"\tmov r9, sob_nil\n"
+         ^"\tmov r8, qword[rsp+2*8]\n" (*6*)
+       
+
+         (*inside the list loop -> r8 index = 3, r9 is the cdr*)
+        ^(Printf.sprintf("%s:\n") label_loop) 
+        ^(Printf.sprintf"\tcmp r8, %d\n" ((List.length params')))
+        ^( Printf.sprintf "\tje %s\n" label_loop_exit)
+        
+        
+        
+        (*loop starts here*)
+        ^"\tmov rbx, qword[rsp + 8 * (2 + r8)]\n"  
+        ^"\tmov rdi, 1+8+8\t;for pair\n"
+        ^"\tcall malloc\t ;to create the pair in the stack\n" (*the pair is now in rax*)
+        ^"\tmov byte [rax], T_pair\t ; to make it a pair\n"
+        ^"\tmov qword[rax+1],rbx\t ;put the car in the last (not inside of the list yet) in the pair\n "
+        ^"\tmov qword[rax+1+8],r9\n"
+        ^"\tmov r9 , rax\t ; for the recursion \n"
+        ^"\tdec r8\n"
          ^( Printf.sprintf "\tjmp %s\n" label_loop)
          ^(Printf.sprintf "%s:\n" label_loop_exit)
           
+
+          (*r9 holds the list*)
+         
           ^(Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*6*)
           ^(Printf.sprintf "\tmov rdi, %d\n" ((List.length params') + 1)) (*4*)
           ^(Printf.sprintf "\tsub rax, rdi\n") (*2*)
-          ^(Printf.sprintf "\tmov rdi, rax\n")
-          ^ (Printf.sprintf "\timul rax,8\n")
-          ^ (Printf.sprintf "\tadd rsp, rax\n")
+          ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi is 2*)
+          ^(Printf.sprintf "\timul rax,8\n")
+          ^(Printf.sprintf "\tadd rsp, rax\n")
+          
 
-
-
-           (*no need to copy the params, just adjst their location*)
-           ^ (String.concat "" (List.mapi (fun i _ ->
+          (*put list at the top - rdi is in how many bytes the stack was shrinked*)
+          ^"\tmov rax, rsp\n"
+          ^"\tmov r8, rdi\n"
+          ^"\timul r8, 8\n"
+          ^"\tsub rax, r8\n" (*rax is in the original place*)
+          ^"\tmov r10, rax\t; holds the original ret in the stack\n" 
+          ^"\tadd r10, 8*3\n" (*r10 is the location of PARAM(0)*)
+          ^"\tadd rax, 2* 8\t; rax holds arg count [rsp+ 2*8] in the original \n" 
+          ^"\tmov r8, qword[rax] ;arg count = r8\n"
+          ^"\timul r8,8\n"
+          ^"\tadd rax, r8\n"
+          ^"\tmov qword[rax] ,r9\n "
+          (*R10 HOLDS THE FIRST PARAM(0)!!!!*)
+          (*no need to copy the params, just adjst their location*)
+          ^ (String.concat "" (List.mapi (fun i _ ->
             let index = (List.length params') - i - 1 in
-            Printf.sprintf "\tmov rbx, rdi\n\timul rbx, 8\n\tmov rax, qword[rsp + 8 * (3 + %d)]\n\tsub rax, rbx\n\tmov qword[rsp + 8 * (3 + %d)], rax\n" index index) params'))
-
-
-            ^ (Printf.sprintf "\tmov rax, rdi\n") (*2*)
-            ^ (Printf.sprintf "\timul rax, 8\n")
-            ^ (Printf.sprintf "\tsub rax, rsp\n")
-            ^ (Printf.sprintf "\tmov rdi, rax\n")
-            ^ (Printf.sprintf "\tadd rax, 8 * 2\n")
-            ^ (Printf.sprintf "\tmov qword [rax], %d\n" ((List.length params') + 1))
+            Printf.sprintf "\tmov r8, r10\n" ^
+            Printf.sprintf "\tadd r8, 8 * %d\n" index ^
+            "\tmov r9,qword[r8]\n"^
+            Printf.sprintf "\tmov qword [r8 + rdi * 8], r9\n"
+          ) params'))
+   
+            
+            ^"\tsub r10, 8*3\n" 
+            (*FROM NOW ON R10 IS RET*)
+            (*FRON NOW ON RDI IS 2*)
+            ^(Printf.sprintf "\tmov qword [rsp+2*8], %d\n" ((List.length params') + 1))
          (*rdi will hold the number of bytes / 8 to add*)
          
 
            (*move env down*)
-           ^ (Printf.sprintf "\tmov rax, rdi\n")
-           ^ (Printf.sprintf "\tadd rax, 8 * 1\n")
-          ^ (Printf.sprintf "\tmov rax, qword[rax] ;rax now holds env \n") (*moving env one down*)
-          ^ (Printf.sprintf "\tmov qword[rsp + 8 * 1], rax\n") 
- 
-          ^ (Printf.sprintf "\tmov rax, rdi\n")
+           ^"\tmov rax, qword[r10 + 1 * 8]\n"
+           ^"\tmov qword[rsp + 1*8] ,rax\n"
+
           (*move ret down*)
-          ^ (Printf.sprintf "\tmov rax, qword[rax]\n") 
+          ^ (Printf.sprintf "\tmov rax, qword[r10]\n") 
           ^ (Printf.sprintf "\tmov qword[rsp], rax\n")
             
 
