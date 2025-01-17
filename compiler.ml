@@ -1162,7 +1162,7 @@ end;; (* end of struct Reader *)
        | ScmApplic' (procs, args, app_kind) ->
         let proc' = run true procs in
         let args' =  List.map (run false) args in (*args are never in tail position regarding application (f x)*)
-        let app_kind' = (*if in_tail then Tail_Call else Non_Tail_Call in*) Non_Tail_Call in
+        let app_kind' = if in_tail then Tail_Call else Non_Tail_Call in
         ScmApplic'(proc', args', app_kind')
        
      and runl in_tail expr = function
@@ -2296,9 +2296,11 @@ ScmLambda' (["a"; "b"], Simple,
          ---->3
          ---->2
          ---->1 rsp + 8*3 == rbp + 8*4
+         ----> rsp = rbp
          ---->rsp (ret) = rbp*) 
 
       | ScmApplic' (proc, args, Non_Tail_Call) -> 
+  
          let args_code =
            String.concat ""
              (List.map
@@ -2308,6 +2310,7 @@ ScmLambda' (["a"; "b"], Simple,
                   ^ "\tpush rax\n")
                 (List.rev args)) in
          let proc_code = run params env proc in
+   
          "\t; preparing a non-tail-call\n"
          ^ args_code
          ^ (Printf.sprintf "\tpush %d\t; arg count\n" (List.length args))
@@ -2316,8 +2319,91 @@ ScmLambda' (["a"; "b"], Simple,
          ^ "\tjne L_error_non_closure\n"
          ^ "\tpush SOB_CLOSURE_ENV(rax)\n"
          ^ "\tcall SOB_CLOSURE_CODE(rax)\n"
+
+
       | ScmApplic' (proc, args, Tail_Call) -> 
-         raise (X_not_yet_implemented "final project")
+        (*first cacaulate each argument and then push it to the stack - reault is in rax*)
+        let args_code =
+          String.concat ""
+            (List.map
+               (fun arg ->
+                 let arg_code = run params env arg in
+                 arg_code
+                 ^ "\tpush rax\n")
+               (List.rev args))  in
+        let proc_code = run params env proc in
+        let loop_code=make_tc_applic_recycle_frame_loop() in
+        let loop_end=make_tc_applic_recycle_frame_done() in
+        "\t; preparing a tail-call\n"
+        ^ args_code
+        ^ (Printf.sprintf "\tpush %d\t; arg count\n" (List.length args))
+        ^ proc_code
+        ^ "\tcmp byte [rax], T_closure\n" (*make sure that rax is clousre*)
+        ^ "\tjne L_error_non_closure\n"
+        ^ "\tpush SOB_CLOSURE_ENV(rax)\n"  (*push LexEnv of h*)
+        ^"\tpush qword[rbp+ 8 * 1]\t ;old ret address of f\n"
+        ^"\tpush qword[rbp]\n"
+        (*rsp [0] -> old ret*)
+       ^"\tmov rbx, qword[rsp+8*2]\t ;rbx holds the lexical enviroment of h\n"
+       ^"\tmov qword[rbp + 8*2],rbx\n"
+       ^(Printf.sprintf "\tmov qword[rbp + 8*3], %d\t ;n turns to m\n" (List.length args))
+      ^(Printf.sprintf"\tmov rdi,%d\n" 0)
+      ^(Printf.sprintf"\tjmp %s\n" loop_code)
+      ^(Printf.sprintf"%s:\n" loop_code)
+      ^"\tcmp rdi, qword[rbp + 8*3]\t ;if rdi is equal to the number of parans - we donec\n"
+      ^(Printf.sprintf"\tje %s\n" loop_end)
+      ^Printf.sprintf "\tmov rbx, qword[rsp + 8 * (4 + rdi)]\n" 
+      ^Printf.sprintf "\tmov qword[rbp + 8 * (4 + rdi)],rbx\n"
+      ^"\tinc rdi\n"
+      ^(Printf.sprintf"\tjmp %s\n" loop_code)
+      ^(Printf.sprintf"%s:\n" loop_end)
+      
+    
+      ^(Printf.sprintf("\tmov rsp, rbp\t; point to last argument\n")) (*rsp points to the top of the stack*)
+      ^("\tpop rbp\n")      
+      ^ "\tjmp SOB_CLOSURE_CODE(rax)\n"
+        (*go to where g frame starts [rbp + 800] and mov the frame to there*)
+        
+        (*define f (lambda (x) 1)*)
+        (*(lambda (f) (+ 1 (lambda (a b c) (lambda (h) .....))*)
+
+        (*push qword [rbp + 8 * 1] ; old ret addr
+        pop rbp ; restore the old rbp
+        Fix the stack (see next slide)
+        jmp rax→ code*)
+
+
+      (*
+      
+      n+4----------> An-1
+      n+3----------> An-2
+      ...
+      ...
+      ...
+      4----------> A0
+      3----------> n
+      2----------> lex env g
+      1----------> ret addr
+      0----------> old rbp 
+      
+      
+
+      
+      m+4----------> Bm-1
+      m+3----------> Bm-2
+      ...
+      ...
+      ...
+      4----------> B0
+      3----------> m
+      2----------> lex env h
+      1----------> ret addr (of f)
+      
+      
+      for(int i=0; i<m+5;i++){
+      mov qword[rbp+ 8*3], m
+      }
+      *)
     and runs params env exprs' =
       List.map (fun expr' -> run params env expr') exprs' in
     let codes = runs 0 0 exprs' in
@@ -2337,6 +2423,12 @@ ScmLambda' (["a"; "b"], Simple,
       ^ "\tcall print_sexpr_if_not_void\n"
       ^ (file_to_string "epilogue.asm") in
     code;;
+
+
+
+
+
+
 
   let compile_scheme_string file_out user =
     let init = file_to_string "init.scm" in
