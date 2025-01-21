@@ -1532,7 +1532,7 @@ module Code_Generation (* : CODE_GENERATION *) = struct
 
   let global_bindings_table =
     [ (* 1-10 *)
-      (("null?", "L_code_ptr_is_null");
+      ("null?", "L_code_ptr_is_null");
       ("pair?", "L_code_ptr_is_pair");
       ("void?", "L_code_ptr_is_void");
       ("char?", "L_code_ptr_is_char");
@@ -1619,8 +1619,8 @@ module Code_Generation (* : CODE_GENERATION *) = struct
       ("primitive?", "L_code_ptr_is_primitive");
       ("length", "L_code_ptr_length");
       ("make-list", "L_code_ptr_make_list");
-      ("return", "L_code_ptr_return");)
-    ];;  
+      ("return", "L_code_ptr_return");
+    ];; 
 
 
   let collect_constants =
