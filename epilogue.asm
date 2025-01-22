@@ -882,85 +882,9 @@ L_code_ptr_lognot:
         leave
         ret AND_KILL_FRAME(1)
 
-
 L_code_ptr_bin_apply:
-        enter 0, 0
-        cmp COUNT, 2
-        jl L_error_arg_count_2    ; Need at least 2 arguments
-        
-        mov r8, COUNT             ; Save original argument count
-        dec r8                    ; Last argument is the list
-        mov r9, PARAM(r8)         ; Get the list (last argument)
-        mov rbx, PARAM(0)         ; Get the function (first argument)
-        ; Count elements in the list
-        mov r10, 0                ; List element counter
-        mov r11, r9               ; List pointer for counting
+;;; fill in for final project!
 
-        
-.count_loop:
-        cmp byte [r11], T_nil
-        je .prepare_stack
-        assert_pair(r11)
-        inc r10                   ; Increment list element count
-        mov r11, SOB_PAIR_CDR(r11)
-        jmp .count_loop
-
-.prepare_stack:
-        ; Calculate total arguments (direct args + list elements)
-        mov r11, 0             ; Number of direct arguments
-        add r11, r10            ; Add list elements count
-        
-        ; Allocate new frame
-        mov rax, r11            ; Total argument count
-        shl rax, 3              ; Multiply by 8 for byte count
-        add rax, 8*4            ; Add space for ret, env, old rbp, arg count
-        mov r12, rax            ; Save frame size
-        
-        sub rsp, r12            ; Allocate frame
-        
-        ; Copy direct arguments (excluding the list)
-        mov rcx, r8              ; Number of direct arguments
-        dec rcx                  ; Exclude the list
-        mov rdx, 0              ; Destination offset
-
-.copy_list:
-        ; Copy list elements
-        mov r13, r9             ; List pointer
-.copy_list_loop:
-        cmp byte [r13], T_nil
-        je .finish_frame
-        mov rax, SOB_PAIR_CAR(r13)    ; Get list element
-        mov [rsp + 8*4 + rdx*8], rax  ; Store in frame
-        inc rdx
-        mov r13, SOB_PAIR_CDR(r13)
-        jmp .copy_list_loop
-
-.finish_frame:
-        ; Set up frame
-        mov rax, r11            ; Total argument count
-        mov [rsp + 8*3], rax    ; Store argument count
-        mov rax, [rbp + 8*2]    ; Get current env
-        mov [rsp + 8*2], rax    ; Store env
-        mov rax, [rbp + 8*1]    ; Get return address
-        mov [rsp + 8*1], rax    ; Store return address
-        mov rax, rbp            ; Get old rbp
-        mov [rsp], rax          ; Store old rbp
-        
-        ; Get the function
-        mov rax, rbx
-        assert_closure(rax)
-        
-        ; Set up for call
-        mov rbp, rsp            ; Set new frame pointer
-        mov rsp, rbp            ; Align stack pointer
-        
-        ; Call the function
-        push SOB_CLOSURE_ENV(rax)
-        call SOB_CLOSURE_CODE(rax)
-                
-        leave
-        ret AND_KILL_FRAME(2)
-        
 L_code_ptr_is_null:
         enter 0, 0
         cmp COUNT, 1
