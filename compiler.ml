@@ -2359,7 +2359,7 @@ ScmLambda' (["a"; "b"], Simple,
       ^(Printf.sprintf"%s:\n" loop_end)
       
     
-      ^(Printf.sprintf("\tmov rsp, rbp\t; point to last argument\n")) (*rsp points to the top of the stack*)
+      ^(Printf.sprintf("\tmov rsp, qword[rbp+ 8 * 1]\t; point to last argument\n")) (*rsp points to the top of the stack*)
       ^("\tpop rbp\n")      
       ^ "\tjmp SOB_CLOSURE_CODE(rax)\n"
         (*go to where g frame starts [rbp + 800] and mov the frame to there*)
