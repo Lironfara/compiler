@@ -1162,7 +1162,7 @@
         | ScmApplic' (procs, args, app_kind) ->
          let proc' = run true procs in
          let args' =  List.map (run false) args in (*args are never in tail position regarding application (f x)*)
-         let app_kind' = if in_tail then Tail_Call else Non_Tail_Call in
+         let app_kind' = (*if in_tail then Tail_Call else*) Non_Tail_Call in
          ScmApplic'(proc', args', app_kind')
         
       and runl in_tail expr = function
@@ -1654,7 +1654,7 @@
        | ScmSymbol sym -> [ScmString sym; ScmSymbol sym]
        | ScmPair (car, cdr) -> (run car) @ (run cdr) @ [sexpr]
        | ScmVector sexprs -> (runs sexprs) @ [sexpr]
-       |_ -> []
+
      and runs sexprs =
        List.fold_left (fun full sexpr -> full @ (run sexpr)) [] sexprs
      in fun exprs' ->
@@ -2343,15 +2343,10 @@
          ^ "\tpush SOB_CLOSURE_ENV(rax)\n"  (*push LexEnv of h*)
          ^"\tpush qword[rbp+ 8 * 1]\t ;old ret address of f\n"
          ^"\tpush qword[rbp]\n"
-         (*rsp [0] -> old rbp of f*)
-         (*rsp [1] -> ret adress of f*)
-         (*rsp [2] -> env of h*)
-         (*rsp[3]-> count of h*)
-         (*We need to run over rbp of g*)
          
          ^"\tmov r15, rbp\t ;will hold the rbp we need to overwrite\n "
-         ^"\tmov r14, qword[r15 + 3*8]\t ;r14 holding the param count of g\n"
-         ^"\tmov r14, 3 \t ;adding so we will get to the params \n"
+         ^"\tmov r14, qword[r15 + 3*8]\t ;r14 holding the param count of h\n"
+         ^"\tadd r14, 3 \t ;adding so we will get to the params \n"
          ^"\tshl r14, 3 \t ;multiplie r14 by 8\n"
          ^"\tadd r15, r14 \t ;now r15 points to the top of the rbp, An-1 \n"
          (*R15 TOP OF RBP*)

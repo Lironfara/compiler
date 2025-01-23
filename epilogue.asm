@@ -883,7 +883,53 @@ L_code_ptr_lognot:
         ret AND_KILL_FRAME(1)
 
 L_code_ptr_bin_apply:
-;;; fill in for final project!
+        ;assuming we have 2 params - f and list to apply f on it
+        cmp COUNT, 2
+        jl L_error_arg_count_2    ; f and list
+        mov r8, qword[rbp]      ;backup rbp
+        
+        mov r9, qword[rbp +8]   ;backup ret addr
+        mov r15, PARAM(1)         ;get list
+        mov rax, PARAM(0)         ;get f
+        ; Count elements in the list
+        mov r10, 0                ;counter
+        mov r11, r15 ; Is the list pointer
+       
+        
+.count_loop:
+        cmp byte [r11], T_nil ;checking if we done, it's a proper list
+        je .write_over_frame
+        inc r10                   ; Increment list element count
+        mov r11, SOB_PAIR_CDR(r11) ;getting the next element in s if error might be here
+        jmp .count_loop
+
+        ;r10 list length
+
+.write_over_frame:
+        mov r11, r10 ;
+        sub r11, 2 ;how much to increase rbp for list argumetns
+        shl r11, 3 ;multiply by 8
+        sub rbp, r11 ;making space for list arguemtns
+
+.mov_env_rbp:
+        mov qword[rbp], r8 ;restore old rbp
+        mov qword[rbp + 8], r9 ;restore old ret addr
+        mov qword[rbp + 8*2], SOB_CLOSURE_ENV(rax) ;save the env in the new frame
+        mov qword[rbp+ 8*3], r10 ;save the number of params in the new frame
+        mov r11, 0;
+        ;r10 is the originl list length
+.copy_list_arguments:
+        cmp r11, r10 ;reached to the end of the list
+        je .done_copy_list_arguments;
+        mov r12, SOB_PAIR_CAR(r15) ;get the car of the list
+        mov qword PARAM(r11), r12 ;copy the car to the new frame
+        mov r15, SOB_PAIR_CDR(r15) ;get the cdr of the list
+        jmp .copy_list_arguments
+        ;;;rsp now points to the old ret?
+        ;;;rbp now points to the older rbp?
+.done_copy_list_arguments:
+        jmp SOB_CLOSURE_CODE(rax) ;jump to the code of the closure
+
 
 L_code_ptr_is_null:
         enter 0, 0
