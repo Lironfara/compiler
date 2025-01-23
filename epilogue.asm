@@ -883,21 +883,22 @@ L_code_ptr_lognot:
         ret AND_KILL_FRAME(1)
 
 L_code_ptr_bin_apply:
+        enter 0,0
         ;assuming we have 2 params - f and list to apply f on it
         cmp COUNT, 2
         jl L_error_arg_count_2    ; f and list
-        mov r8, qword[rbp]      ;backup rbp
-        
+        mov r8, qword[rbp]      ;backup rbp  
         mov r9, qword[rbp +8]   ;backup ret addr
         mov r15, PARAM(1)         ;get list
         mov rax, PARAM(0)         ;get f
-        ; Count elements in the list
+
+        assert_closure(rax)        ; Count elements in the list
         mov r10, 0                ;counter
         mov r11, r15 ; Is the list pointer
        
         
 .count_loop:
-        cmp byte [r11], T_nil ;checking if we done, it's a proper list
+        cmp r11, sob_nil ;checking if we done, it's a proper list
         je .write_over_frame
         inc r10                   ; Increment list element count
         mov r11, SOB_PAIR_CDR(r11) ;getting the next element in s if error might be here
@@ -912,9 +913,10 @@ L_code_ptr_bin_apply:
         sub rbp, r11 ;making space for list arguemtns
 
 .mov_env_rbp:
-        mov qword[rbp], r8 ;restore old rbp
+        mov qword[rbp], r8 ;restore old rbp ;now rbp points to the right position
         mov qword[rbp + 8], r9 ;restore old ret addr
-        mov qword[rbp + 8*2], SOB_CLOSURE_ENV(rax) ;save the env in the new frame
+        mov rbx, SOB_CLOSURE_ENV(rax)
+        mov qword[rbp + 8*2], rbx ;save the env in the new frame
         mov qword[rbp+ 8*3], r10 ;save the number of params in the new frame
         mov r11, 0;
         ;r10 is the originl list length
@@ -924,10 +926,12 @@ L_code_ptr_bin_apply:
         mov r12, SOB_PAIR_CAR(r15) ;get the car of the list
         mov qword PARAM(r11), r12 ;copy the car to the new frame
         mov r15, SOB_PAIR_CDR(r15) ;get the cdr of the list
+        inc r11
         jmp .copy_list_arguments
         ;;;rsp now points to the old ret?
         ;;;rbp now points to the older rbp?
 .done_copy_list_arguments:
+        lea rsp, [rbp + 8*1]
         jmp SOB_CLOSURE_CODE(rax) ;jump to the code of the closure
 
 

@@ -1160,9 +1160,9 @@
          ScmLambda' (params, lambda_kind, exp')
         (* add support for applic *)
         | ScmApplic' (procs, args, app_kind) ->
-         let proc' = run true procs in
+         let proc' = run false procs in (*Mayer change*)
          let args' =  List.map (run false) args in (*args are never in tail position regarding application (f x)*)
-         let app_kind' = (*if in_tail then Tail_Call else*) Non_Tail_Call in
+         let app_kind' = if in_tail then Tail_Call else Non_Tail_Call in
          ScmApplic'(proc', args', app_kind')
         
       and runl in_tail expr = function
