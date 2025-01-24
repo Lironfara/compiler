@@ -2277,12 +2277,8 @@
            (*rax - adress to copy to*)
 
            ^(String.concat "" (List.mapi (fun i _ ->
-            Printf.sprintf "\tmov r8, qword [rbx] \t;r8 is holding the param to copy\n
-            \tmov qword[rax], r8
-            \tsub rax, 8\n\tsub rbx, 8\n") params'))
+            Printf.sprintf "\tmov r8, qword [rbx] \t;r8 is holding the param to copy\n\tmov qword[rax], r8\n\tsub rax, 8\n\tsub rbx, 8\n") params'))
             
-
-
             ^"\tmov rax, rsp\n"
             ^"\tsub rax, rcx \t ;now rax is original ret\n"
              (*rax is the original ret*)
