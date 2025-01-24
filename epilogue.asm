@@ -883,7 +883,6 @@ L_code_ptr_lognot:
         ret AND_KILL_FRAME(1)
 
 L_code_ptr_bin_apply:
-        enter 0,0
         ;assuming we have 2 params - f and list to apply f on it
         cmp COUNT, 2
         jl L_error_arg_count_2    ; f and list
@@ -898,7 +897,7 @@ L_code_ptr_bin_apply:
        
         
 .count_loop:
-        cmp r11, sob_nil ;checking if we done, it's a proper list
+        cmp qword[r11], sob_nil ;checking if we done, it's a proper list
         je .write_over_frame
         inc r10                   ; Increment list element count
         mov r11, SOB_PAIR_CDR(r11) ;getting the next element in s if error might be here

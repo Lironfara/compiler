@@ -1,77 +1,77 @@
-L_code_ptr_bin_apply:
-        enter 0, 0
-        cmp COUNT, 2
-        jl L_error_arg_count_2    ; Need at least 2 arguments
-        
-        mov r8, COUNT             ; Save original argument count
-        dec r8                    ; Last argument is the list
-        mov r9, PARAM(r8)         ; Get the list (last argument)
-        mov rbx, PARAM(0)         ; Get the function (first argument)
-        ; Count elements in the list
-        mov r10, 0                ; List element counter
-        mov r11, r9               ; List pointer for counting
 
-        
-.count_loop:
-        cmp byte [r11], T_nil
-        je .prepare_stack
-        assert_pair(r11)
-        inc r10                   ; Increment list element count
-        mov r11, SOB_PAIR_CDR(r11)
-        jmp .count_loop
+             
+(*          
+          ^ (Printf.sprintf "%s:\n" label_arity_more)
+          ^ "\tmov r10, qword[rsp + 2 * 8]\n \t ;r10 is holding the number of params paseed to the lambda \n" (*r10 = 6*)
+          ^ "\tmov r11, r10\t ;for the list converting loop\n"
+          ^(Printf.sprintf"\tsub r10, %d \t ;r10 now holding the number of opt params\n" (List.length params') (*3*))
+          ^"\tdec r10 \t ;r10 is now holding how much the stack needs to shrink/8 \n"
+          ^"\timul r10, 8\t ;r10 is now holding how much the stack needs to shrink\n"
+          ^"\tmov r9, sob_nil\n"
+          ^"\tmov r12, r11 \n"
+          ^"\tadd r12, 3 \n"
+          ^"\timul r12, 8 \t ;r12 =  8 * [3+ r11]\n"
+          ^"\tadd r12, rsp \t ;r12 pointing to the top of the stack\n"
+          ^"\tmov r13, r12\t; r13 is pointing to the top of the stack\n"
+          (*Creating the list of opt params*)
+          (*r11 is the number of params including opt*)
+          ^(Printf.sprintf("%s:\n") label_loop) 
+          ^(Printf.sprintf"\tcmp r11, %d\n" ((List.length params'))) (*r11 = 6, list.length = 3*)
+          ^( Printf.sprintf "\tje %s\n" label_loop_exit)   
+          (*loop starts here*)
+          ^"\tmov rbx, qword[r12] \t; getting the param\n"  
+          ^"\tmov rdi, 1+8+8\t;for pair\n"
+          ^"\tcall malloc\t ;to create the pair in the stack\n" (*the pair is now in rax*)
+          ^"\tmov byte [rax], T_pair\t ; to make it a pair\n"
+          ^"\tmov qword[rax+1],rbx\t ;put the car in the last (not inside of the list yet) in the pair\n "
+          ^"\tmov qword[rax+1+8],r9 \t ;the cdr is nil at first\n"
+          ^"\tmov r9 , rax\t ; for the recursion \n"
+          ^"\tdec r11\n"
+          ^"\tsub r12, 8\n"
+           ^( Printf.sprintf "\tjmp %s\n" label_loop)
+           ^(Printf.sprintf "%s:\n" label_loop_exit)
 
-.prepare_stack:
-        ; Calculate total arguments (direct args + list elements)
-        mov r11, 0             ; Number of direct arguments
-        add r11, r10            ; Add list elements count
-        
-        ; Allocate new frame
-        mov rax, r11            ; Total argument count
-        shl rax, 3              ; Multiply by 8 for byte count
-        add rax, 8*4            ; Add space for ret, env, old rbp, arg count
-        mov r12, rax            ; Save frame size
-        
-        sub rsp, r12            ; Allocate frame
-        
-        ; Copy direct arguments (excluding the list)
-        mov rcx, r8              ; Number of direct arguments
-        dec rcx                  ; Exclude the list
-        mov rdx, 0              ; Destination offset
 
-.copy_list:
-        ; Copy list elements
-        mov r13, r9             ; List pointer
-.copy_list_loop:
-        cmp byte [r13], T_nil
-        je .finish_frame
-        mov rax, SOB_PAIR_CAR(r13)    ; Get list element
-        mov [rsp + 8*4 + rdx*8], rax  ; Store in frame
-        inc rdx
-        mov r13, SOB_PAIR_CDR(r13)
-        jmp .copy_list_loop
+           (*We now have : r9 is holding the list of opt params*)
+           (*r10 is holding the in how much to add to the stack - needs to shrink*)
+           (*r13 is holding the top of the stack before shrinking*)
+           (*r12 is pointing to the last params that is not optional*)
+           ^"\tmov rcx, qword[rsp] \t;rcx is holding the ret \n"
+           ^"\tmov rbx, qword[rsp + 8 *1] \t ;rbx is holding the env \n"
+           ^"\tmov qword[r13], r9 \t ;put the list at the top of the stack\n"
+           ^"\tsub r13, 8\t ;supposed to start the copying to here\n"
+           ^"\tadd rsp, r10\n"
 
-.finish_frame:
-        ; Set up frame
-        mov rax, r11            ; Total argument count
-        mov [rsp + 8*3], rax    ; Store argument count
-        mov rax, [rbp + 8*2]    ; Get current env
-        mov [rsp + 8*2], rax    ; Store env
-        mov rax, [rbp + 8*1]    ; Get return address
-        mov [rsp + 8*1], rax    ; Store return address
-        mov rax, rbp            ; Get old rbp
-        mov [rsp], rax          ; Store old rbp
-        
-        ; Get the function
-        mov rax, rbx
-        assert_closure(rax)
-        
-        ; Set up for call
-        mov rbp, rsp            ; Set new frame pointer
-        mov rsp, rbp            ; Align stack pointer
-        
-        ; Call the function
-        push SOB_CLOSURE_ENV(rax)
-        call SOB_CLOSURE_CODE(rax)
-                
-        leave
-        ret AND_KILL_FRAME(2)
+           ^"\tmov r9, rsp\t ;r9 is pointing to the rsp of the stack\n"
+
+           ^(Printf.sprintf "%s:\n"label_loop_params_opt)
+           (*making a loop to move the params up*)
+           ^"\tcmp r13, r9\n"
+           ^(Printf.sprintf"\tje %s\n" label_loop_params_end_opt)
+           ^"\tmov rax, qword[r12]\t ;getting the param\n"
+            ^"\tmov qword[r13], rax\n"
+            ^"\tsub r13, 8\n"
+            ^"\tsub r12, 8\n"
+            ^(Printf.sprintf "\tjmp %s\n" label_loop_params_opt)
+            ^(Printf.sprintf "%s:\n" label_loop_params_end_opt)
+           
+          
+            ^ "\tenter 0, 0\n"
+            ^ (run ((List.length params') + 1) (env + 1) body)
+            ^ "\tleave\n"
+            ^ (Printf.sprintf "\tret AND_KILL_FRAME(%d)\n" ((List.length params') + 1)) (*the number of arguments you need to remove from stack*)
+            ^ (Printf.sprintf "%s:\t; new closure is in rax\n" label_end) *) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+

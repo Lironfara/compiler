@@ -1947,11 +1947,15 @@
           Printf.sprintf "\tmov rax, PARAM(%d)\t; param %s\n"
             minor v (*mov rax, qword [rbp + 8 ∗ (4 + minor)]*)
             (*%define PARAM(n) qword [rbp + 8 * (4 + n)]*)
+
+
        | ScmVarGet' (Var' (v, Bound (major, minor))) ->
           "\tmov rax, ENV\n" (*%define ENV qword [rbp + 8 * 2]*)
           ^ (Printf.sprintf "\tmov rax, qword [rax + 8 * %d]\n" major)
           ^ (Printf.sprintf
                "\tmov rax, qword [rax + 8 * %d]\t; bound var %s\n" minor v)
+
+
        | ScmIf' (test, dit, dif) ->
           let test_code = run params env test
           and dit_code = run params env dit
@@ -1969,6 +1973,7 @@
        | ScmSeq' exprs' ->
           String.concat "\n"
             (List.map (run params env) exprs')
+
        | ScmOr' exprs' ->
          let exit_code = make_or_end () in
         String.concat (
@@ -1976,18 +1981,22 @@
          ^ (Printf.sprintf "\tjne %s\n" exit_code))
          (List.map (run params env) exprs')
          ^(Printf.sprintf "%s:\n" exit_code)
+
        | ScmVarSet' (Var' (v, Free), expr') ->
            let expr_code = run params env expr'
            and lexical_add = search_free_var_table v free_vars in
            expr_code
            ^(Printf.sprintf "\tmov qword [%s], rax\n" lexical_add)
            ^(Printf.sprintf "\tmov rax, sob_void\n")
-           
+
        | ScmVarSet' (Var' (v, Param minor), ScmBox' _) ->
-         let box_var_code = Printf.sprintf "\tmov rbx, qword [rbp + 8 * (4 + %d)]\n" minor in
-         let box_code = Printf.sprintf "\tmov qword [rbx], rax\n" in (*the new box adress will hold rbx value*)
-         box_var_code ^ box_code
- 
+         "\tmov rdi, 8*1\n"
+         ^"\tcall malloc\n"
+         ^(Printf.sprintf "\tmov rbx, PARAM(%d)\n" minor)
+         ^"\tmov qword[rax], rbx\n"
+          ^(Printf.sprintf "\tmov PARAM(%d), rax\n" minor)
+          ^"\tmov rax, sob_void\n"
+
        | ScmVarSet' (Var' (v, Param minor), expr') ->
           let expr_code = run params env expr' in
           expr_code
@@ -1997,7 +2006,7 @@
        | ScmVarSet' (Var' (v, Bound (major, minor)), expr') ->
           let expr_code = run params env expr' in
           expr_code
-          ^(Printf.sprintf "\tmov rbx, ENV\n")
+          ^(Printf.sprintf "\tmov rbx, qword[rbp + 8 * 2]\n")
           ^(Printf.sprintf "\t mov rbx, qword [rbx + 8*%d]\n" major)
           ^(Printf.sprintf "\tmov qword [rbx + 8*%d], rax\n" minor)
           ^(Printf.sprintf "\tmov rax, sob_void\n")
@@ -2012,9 +2021,13 @@
        | ScmVarDef' (Var' (v, Bound (major, minor)), expr') ->
           raise (X_not_yet_implemented "Support local definitions (bound)")
        | ScmBox' _ -> assert false
+       
        | ScmBoxGet' var' ->
           (run params env (ScmVarGet' var'))
           ^ "\tmov rax, qword [rax]\n"
+
+
+
        | ScmBoxSet' (var', expr') -> (*need to update the boxed value*)
           let expr_code= run params env expr' in
           let var_code = run params env (ScmVarGet' var') in
@@ -2105,6 +2118,7 @@
           and label_end = make_lambda_opt_end ()
           and label_loop = make_lambda_opt_loop ()
           and label_loop_exit = make_lambda_opt_loop_exit ()
+          
           in
           "\tmov rdi, (1 + 8 + 8)\t; sob closure\n"
           ^ "\tcall malloc\n"
@@ -2158,6 +2172,7 @@
              (List.length params')) (*We need to push also nil for opt ()*)
           ^ (Printf.sprintf "\tje %s\n" label_arity_exact) (*labda (a b c . d) -> enter a,b,c*)
                (*fixing and so on*)
+               
           ^ (Printf.sprintf "\tjg %s\n" label_arity_more) 
                (*for getting c as a list*) (*(lambda (a b c . d) ... ) 1 2 3 4 5 6 -> 1 2 3 (4 5 6)*)
                (*jg pack to list opt = (4 5 6)*)
@@ -2169,6 +2184,7 @@
           (*fixing the stack stage*)
           ^ (Printf.sprintf "%s:\n" label_arity_exact) (*exect to the number of params - a*)
           (*add 1 argument*)
+
           ^"\tsub rsp, 8\n"
  
           (*move ret down*)
@@ -2195,23 +2211,21 @@
           ^ (Printf.sprintf "\tret AND_KILL_FRAME(%d)\n" ((List.length params') + 1)) (*the number of arguments you need to remove from stack*)
           ^ (Printf.sprintf "\tjmp %s\t; new closure is in rax\n" label_end)
              
+        
          
           ^ (Printf.sprintf "%s:\n" label_arity_more)
-          ^ (Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*4*)
-          ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi = rax = 4*)
+          ^ (Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*6*)
+          ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi = rax = 6*)
           ^"\tmov r9, sob_nil\n"
-          ^"\tmov r8, qword[rsp+2*8]\n" (*6*)
+          ^"\tmov r8, rdi\n" (*6*)
         
  
           (*inside the list loop -> r8 index = 3, r9 is the cdr*)
          ^(Printf.sprintf("%s:\n") label_loop) 
          ^(Printf.sprintf"\tcmp r8, %d\n" ((List.length params')))
          ^( Printf.sprintf "\tje %s\n" label_loop_exit)
-         
-         
-         
          (*loop starts here*)
-         ^"\tmov rbx, qword[rsp + 8 * (2 + r8)]\n"  
+         ^"\tmov rbx, qword[rsp + 8 * (2 + r8)] \t;rbx is the top of the stack\n"  
          ^"\tmov rdi, 1+8+8\t;for pair\n"
          ^"\tcall malloc\t ;to create the pair in the stack\n" (*the pair is now in rax*)
          ^"\tmov byte [rax], T_pair\t ; to make it a pair\n"
@@ -2241,7 +2255,7 @@
            ^"\tmov r10, rax\t; holds the original ret in the stack\n" 
            ^"\tadd r10, 8*3\n" (*r10 is the location of PARAM(0)*)
            ^"\tadd rax, 2* 8\t; rax holds arg count [rsp+ 2*8] in the original \n" 
-           ^"\tmov r8, qword[rax] ;arg count = r8\n"
+           ^"\tmov r8, qword[rax] \t;arg count = r8\n"
            ^"\timul r8,8\n"
            ^"\tadd rax, r8\n"
            ^"\tmov qword[rax] ,r9\n "
@@ -2270,14 +2284,12 @@
            (*move ret down*)
            ^ (Printf.sprintf "\tmov rax, qword[r10]\n") 
            ^ (Printf.sprintf "\tmov qword[rsp], rax\n")
-             
- 
            ^ "\tenter 0, 0\n"
            ^ (run ((List.length params') + 1) (env + 1) body)
            ^ "\tleave\n"
            ^ (Printf.sprintf "\tret AND_KILL_FRAME(%d)\n" ((List.length params') + 1)) (*the number of arguments you need to remove from stack*)
            ^ (Printf.sprintf "%s:\t; new closure is in rax\n" label_end)
- 
+
            (*for the case of more arguments*)
  
         
