@@ -883,12 +883,15 @@ L_code_ptr_lognot:
         ret AND_KILL_FRAME(1)
 
 L_code_ptr_bin_apply:
+        enter 0, 0
         ;assuming we have 2 params - f and list to apply f on it
         cmp COUNT, 2
         jl L_error_arg_count_2    ; f and list
         mov r8, qword[rbp]      ;backup rbp  
         mov r9, qword[rbp +8]   ;backup ret addr
-        lea r15, PARAM(1)         ;get list
+        mov r15, PARAM(1)         ;get list
+        assert_pair(r15)
+        
         mov rax, PARAM(0)         ;get f
 
         assert_closure(rax)        ; Count elements in the list
@@ -931,6 +934,7 @@ L_code_ptr_bin_apply:
         ;;;rbp now points to the older rbp?
 .done_copy_list_arguments:
         lea rsp, [rbp + 8*1]
+        leave
         jmp SOB_CLOSURE_CODE(rax) ;jump to the code of the closure
 
 
