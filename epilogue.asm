@@ -888,7 +888,7 @@ L_code_ptr_bin_apply:
         jl L_error_arg_count_2    ; f and list
         mov r8, qword[rbp]      ;backup rbp  
         mov r9, qword[rbp +8]   ;backup ret addr
-        mov r15, PARAM(1)         ;get list
+        lea r15, PARAM(1)         ;get list
         mov rax, PARAM(0)         ;get f
 
         assert_closure(rax)        ; Count elements in the list

@@ -1990,13 +1990,13 @@
            ^(Printf.sprintf "\tmov rax, sob_void\n")
 
        | ScmVarSet' (Var' (v, Param minor), ScmBox' _) ->
-         "\tmov rdi, 8*1\n"
-         ^"\tcall malloc\n"
-         ^(Printf.sprintf "\tmov rbx, PARAM(%d)\n" minor)
-         ^"\tmov qword[rax], rbx\n"
+          "\tmov rdi, 8*1\n"
+          ^"\tcall malloc\n"
+          ^(Printf.sprintf "\tmov rbx, PARAM(%d)\n" minor)
+          ^"\tmov qword[rax], rbx\n"
           ^(Printf.sprintf "\tmov PARAM(%d), rax\n" minor)
           ^"\tmov rax, sob_void\n"
-
+          
        | ScmVarSet' (Var' (v, Param minor), expr') ->
           let expr_code = run params env expr' in
           expr_code
@@ -2214,76 +2214,89 @@
         
          
           ^ (Printf.sprintf "%s:\n" label_arity_more)
-          ^ (Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*6*)
-          ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi = rax = 6*)
-          ^"\tmov r9, sob_nil\n"
-          ^"\tmov r8, rdi\n" (*6*)
-        
- 
+          ^ (Printf.sprintf "\tmov r8, qword[rsp + 2 * 8]\t;;rax is holding arg count\n") (*6*)
+          ^"\tmov r9, sob_nil\n" (*!!!*)
+          ^"\tmov rbx, rsp \n"
+          ^"\tadd rbx, 3*8 \t; now rbx is pointing to the first param\n"
+          ^"\tdec r8\t ;to get to the top - starting at 0 not 1\n"
+          ^"\tshl r8, 3\n"
+          ^"\tadd rbx, r8\t ;rbx now points to the last opt param that was pushed\n"
+          
+            
+          ^"\tmov r8, qword[rsp + 2* 8]\t;r8 is our loop counter\n"
           (*inside the list loop -> r8 index = 3, r9 is the cdr*)
          ^(Printf.sprintf("%s:\n") label_loop) 
-         ^(Printf.sprintf"\tcmp r8, %d\n" ((List.length params')))
+         ^(Printf.sprintf"\tcmp r8, %d\n" (((List.length params'))))
          ^( Printf.sprintf "\tje %s\n" label_loop_exit)
          (*loop starts here*)
-         ^"\tmov rbx, qword[rsp + 8 * (2 + r8)] \t;rbx is the top of the stack\n"  
          ^"\tmov rdi, 1+8+8\t;for pair\n"
          ^"\tcall malloc\t ;to create the pair in the stack\n" (*the pair is now in rax*)
          ^"\tmov byte [rax], T_pair\t ; to make it a pair\n"
-         ^"\tmov qword[rax+1],rbx\t ;put the car in the last (not inside of the list yet) in the pair\n "
+         ^"\tmov rcx, qword[rbx] \t ;rcx is holding the param to copy\n"
+         ^"\tmov qword[rax+1], rcx\t ;put the car in the last (not inside of the list yet) in the pair\n "
          ^"\tmov qword[rax+1+8],r9\n"
-         ^"\tmov r9 , rax\t ; for the recursion \n"
-         ^"\tdec r8\n"
+         ^"\tmov r9, rax\t ; for the recursion \n"
+         ^"\tdec r8 \t;we finished copy another opt param to the list\n"
+         ^"\tsub rbx, 8 \t ;to get the next param to copy\n"
           ^( Printf.sprintf "\tjmp %s\n" label_loop)
           ^(Printf.sprintf "%s:\n" label_loop_exit)
            
  
            (*r9 holds the list*)
           
-           ^(Printf.sprintf "\tmov rax, qword[rsp + 2 * 8]\n") (*6*)
-           ^(Printf.sprintf "\tmov rdi, %d\n" ((List.length params') + 1)) (*4*)
-           ^(Printf.sprintf "\tsub rax, rdi\n") (*2*)
-           ^(Printf.sprintf "\tmov rdi, rax\n") (*rdi is 2*)
-           ^(Printf.sprintf "\timul rax,8\n")
-           ^(Printf.sprintf "\tadd rsp, rax\n")
+           ^(Printf.sprintf "\tmov rcx, qword[rsp + 2 * 8] \t ;rcx is holding the total number of params including opt\n") (*6*)
+           ^(Printf.sprintf "\tsub rcx, %d\n" ((List.length params') + 1)) (*for empty list*)
+           ^(Printf.sprintf "\tshl rcx, 3 \t;rcx is now holding in how much bytes e need to shrink the stack\n") 
+           ^(Printf.sprintf "\tadd rsp, rcx\t ;shrinking the stack\n") (*stack is shrinked*)
            
  
            (*put list at the top - rdi is in how many bytes the stack was shrinked*)
            ^"\tmov rax, rsp\n"
-           ^"\tmov r8, rdi\n"
-           ^"\timul r8, 8\n"
-           ^"\tsub rax, r8\n" (*rax is in the original place*)
-           ^"\tmov r10, rax\t; holds the original ret in the stack\n" 
-           ^"\tadd r10, 8*3\n" (*r10 is the location of PARAM(0)*)
-           ^"\tadd rax, 2* 8\t; rax holds arg count [rsp+ 2*8] in the original \n" 
-           ^"\tmov r8, qword[rax] \t;arg count = r8\n"
-           ^"\timul r8,8\n"
-           ^"\tadd rax, r8\n"
-           ^"\tmov qword[rax] ,r9\n "
-           (*R10 HOLDS THE FIRST PARAM(0)!!!!*)
-           (*no need to copy the params, just adjst their location*)
-           ^ (String.concat "" (List.mapi (fun i _ ->
-             let index = (List.length params') - i - 1 in
-             Printf.sprintf "\tmov r8, r10\n" ^
-             Printf.sprintf "\tadd r8, 8 * %d\n" index ^
-             "\tmov r9,qword[r8]\n"^
-             Printf.sprintf "\tmov qword [r8 + rdi * 8], r9\n"
-           ) params'))
-    
-             
-             ^"\tsub r10, 8*3\n" 
-             (*FROM NOW ON R10 IS RET*)
-             (*FRON NOW ON RDI IS 2*)
-             ^(Printf.sprintf "\tmov qword [rsp+2*8], %d\n" ((List.length params') + 1))
-          (*rdi will hold the number of bytes / 8 to add*)
-          
- 
+           ^"\tsub rax, rcx \t ;now rax is pointing on the original ret\n" (*now rax is poinitng to the original stack place - ret*)
+
+           (*entering the list - r9*)
+           ^"\tmov r8, qword[rax + 2 * 8]\t ;r8 is holding the arg count including opt\n"
+           ^"\tdec r8 \t ;we start with param 0, not 1 \n"
+           ^"\tadd rax, 3 * 8 \t;now rax is param 0\n"
+           ^"\tshl r8, 3 \t; convert to byte\n"
+           ^"\tadd rax, r8 \t;now rax is the top of the stack\n"
+            ^"\tmov qword[rax], r9\t;puting the list at the top\n"
+
+            (*now we want to copy the params - let's start that rax will point to the top of param*)
+            ^"\tsub rax, 8\t ;rax is the adress to copy to the not optional params\n"
+
+            (*let rbx be the params to copy*)
+            ^"\tmov rbx, rsp \n"
+            ^"\tsub rbx, rcx \t;rbx is the ret adress in the original\n"
+            ^(Printf.sprintf "\tmov r10, %d \t ;r10 is the not opt params length\n" (List.length params'))
+            ^"\tdec r10 \n"
+            ^"\tshl r10, 3\t;to get bytes\n"
+            ^"\tadd rbx, 3*8 \t;rbx is the first param\n"
+            ^"\tadd rbx, r10 \t; rbx is where the address to copy to\n"           
+           (*rbx - params to copy*)
+           (*rax - adress to copy to*)
+
+           ^(String.concat "" (List.mapi (fun i _ ->
+            Printf.sprintf "\tmov r8, qword [rbx] \t;r8 is holding the param to copy\n
+            \tmov qword[rax], r8
+            \tsub rax, 8\n\tsub rbx, 8\n") params'))
+            
+
+
+            ^"\tmov rax, rsp\n"
+            ^"\tsub rax, rcx \t ;now rax is original ret\n"
+             (*rax is the original ret*)
+             (*rsp is on the right place for copy*)
+             ^(Printf.sprintf "\tmov qword [rsp+2*8], %d\n" ((List.length params') + 1)) (*adding the list*)
+        
             (*move env down*)
-            ^"\tmov rax, qword[r10 + 1 * 8]\n"
-            ^"\tmov qword[rsp + 1*8] ,rax\n"
+            ^"\tmov rbx, qword[rax + 8 *1]\n"
+            ^"\tmov qword [rsp + 1*8] ,rbx\n"
  
            (*move ret down*)
-           ^ (Printf.sprintf "\tmov rax, qword[r10]\n") 
-           ^ (Printf.sprintf "\tmov qword[rsp], rax\n")
+           ^"\tmov rbx, qword[rax]\n"
+           ^"\tmov qword [rsp], rbx\n"
+
            ^ "\tenter 0, 0\n"
            ^ (run ((List.length params') + 1) (env + 1) body)
            ^ "\tleave\n"
