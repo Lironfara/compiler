@@ -885,58 +885,46 @@ L_code_ptr_lognot:
 L_code_ptr_bin_apply:
         enter 0, 0
         ;assuming we have 2 params - f and list to apply f on it
-        cmp COUNT, 2
-        jl L_error_arg_count_2    ; f and list
-        mov r8, qword[rbp]      ;backup rbp  
-        mov r9, qword[rbp +8]   ;backup ret addr
-        mov r15, PARAM(1)         ;get list
-        assert_pair(r15)
-        
-        mov rax, PARAM(0)         ;get f
+        mov rax, PARAM(0) ;save f
+        mov rbx, PARAM(1) ;save s
+        mov r10, qword [rbp] ;save old rbp
+        mov r11, qword [rbp + 8 * 1] ;saving ret
+        mov r12, SOB_CLOSURE_ENV(rax) ;saving env
+        mov r8, 0 ;counter for list
 
-        assert_closure(rax)        ; Count elements in the list
-        mov r10, 0                ;counter
-        mov r11, r15 ; Is the list pointer
-       
-        
-.count_loop:
-        cmp qword[r11], sob_nil ;checking if we done, it's a proper list
-        je .write_over_frame
-        inc r10                   ; Increment list element count
-        mov r11, SOB_PAIR_CDR(r11) ;getting the next element in s if error might be here
-        jmp .count_loop
+.list_length_loop:
+        cmp byte [rbx], T_nil ;while s!=null
+        je .list_length_loop_end
+        inc r8
+        mov rbx, SOB_PAIR_CDR(rbx)
+        jmp .list_length_loop
 
-        ;r10 list length
+.list_length_loop_end:
+        mov rbx, PARAM(1) ;restore s
+        mov r15, r8 ;save list length
+        sub r8, 2 ;the stack needs to keep the list, it's already have 2 params
+        shl r8, 3 ;8 bytes for each param
+        sub rbp, r8 ;allocating space for the list        
+        mov r8, 0 ;counter for list
 
-.write_over_frame:
-        mov r11, r10 ;
-        sub r11, 2 ;how much to increase rbp for list argumetns
-        shl r11, 3 ;multiply by 8
-        sub rbp, r11 ;making space for list arguemtns
 
-.mov_env_rbp:
-        mov qword[rbp], r8 ;restore old rbp ;now rbp points to the right position
-        mov qword[rbp + 8], r9 ;restore old ret addr
-        mov rbx, SOB_CLOSURE_ENV(rax)
-        mov qword[rbp + 8*2], rbx ;save the env in the new frame
-        mov qword[rbp+ 8*3], r10 ;save the number of params in the new frame
-        mov r11, 0;
-        ;r10 is the originl list length
-.copy_list_arguments:
-        cmp r11, r10 ;reached to the end of the list
-        je .done_copy_list_arguments;
-        mov r12, SOB_PAIR_CAR(r15) ;get the car of the list
-        mov qword PARAM(r11), r12 ;copy the car to the new frame
-        mov r15, SOB_PAIR_CDR(r15) ;get the cdr of the list
-        inc r11
-        jmp .copy_list_arguments
-        ;;;rsp now points to the old ret?
-        ;;;rbp now points to the older rbp?
-.done_copy_list_arguments:
-        lea rsp, [rbp + 8*1]
+.copy_params_loop:
+        cmp r8, r15
+        je .copy_env_ret_rbp
+        mov rcx, SOB_PAIR_CAR(rbx)
+        mov qword[rbp + 8 * (4 + r8)], rcx
+        mov rbx, SOB_PAIR_CDR(rbx)
+        inc r8
+        jmp .copy_params_loop
+
+.copy_env_ret_rbp:
+        mov qword[rbp], r10 ;in the end rbp points to the older rbp
+        mov qword[rbp + 8 * 1], r11 ;restore ret
+        mov qword[rbp + 8 * 2], r12 ;restore env
+        mov qword[rbp + 8 * 3], r15 ;save list length
+        mov rsp, r11 ;rsp points to the ret adress
         leave
-        jmp SOB_CLOSURE_CODE(rax) ;jump to the code of the closure
-
+        jmp SOB_CLOSURE_CODE(rax)
 
 L_code_ptr_is_null:
         enter 0, 0

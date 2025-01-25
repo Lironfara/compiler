@@ -2158,7 +2158,7 @@
           (*for (i = 0; i < n; ++i)
            ExtEnv [0][i] = Parami;
            *)
-          ^ "\tmov qword [rax], rbx\t; ext_env[0] <-- new_rib \n" (*lambda (x y z) *)
+          ^ "\tmov qword [rax], rbx\t ;ext_env[0] <-- new_rib \n" (*lambda (x y z) *)
           ^ "\tmov rbx, rax\n"
           ^ "\tpop rax\n"
           ^ "\tmov byte [rax], T_closure\n" (*the oragne*)
@@ -2229,50 +2229,50 @@
          ^(Printf.sprintf"\tcmp r8, %d\n" (((List.length params'))))
          ^( Printf.sprintf "\tje %s\n" label_loop_exit)
          (*loop starts here*)
-         ^"\tmov rdi, 1+8+8\t;for pair\n"
-         ^"\tcall malloc\t ;to create the pair in the stack\n" (*the pair is now in rax*)
-         ^"\tmov byte [rax], T_pair\t ; to make it a pair\n"
-         ^"\tmov rcx, qword[rbx] \t ;rcx is holding the param to copy\n"
-         ^"\tmov qword[rax+1], rcx\t ;put the car in the last (not inside of the list yet) in the pair\n "
+         ^"\tmov rdi, 1+8+8 ;for pair\n"
+         ^"\tcall malloc;to create the pair in the stack\n" (*the pair is now in rax*)
+         ^"\tmov byte [rax], T_pair ; to make it a pair\n"
+         ^"\tmov rcx, qword[rbx] ;rcx is holding the param to copy\n"
+         ^"\tmov qword[rax+1], rcx ;put the car in the last (not inside of the list yet) in the pair\n "
          ^"\tmov qword[rax+1+8],r9\n"
-         ^"\tmov r9, rax\t ; for the recursion \n"
-         ^"\tdec r8 \t;we finished copy another opt param to the list\n"
-         ^"\tsub rbx, 8 \t ;to get the next param to copy\n"
+         ^"\tmov r9, rax ;for the recursion \n"
+         ^"\tdec r8 ;we finished copy another opt param to the list\n"
+         ^"\tsub rbx, 8 ;to get the next param to copy\n"
           ^( Printf.sprintf "\tjmp %s\n" label_loop)
           ^(Printf.sprintf "%s:\n" label_loop_exit)
            
  
            (*r9 holds the list*)
           
-           ^(Printf.sprintf "\tmov rcx, qword[rsp + 2 * 8] \t ;rcx is holding the total number of params including opt\n") (*6*)
+           ^(Printf.sprintf "\tmov rcx, qword[rsp + 2 * 8] ;rcx is holding the total number of params including opt\n") (*6*)
            ^(Printf.sprintf "\tsub rcx, %d\n" ((List.length params') + 1)) (*for empty list*)
-           ^(Printf.sprintf "\tshl rcx, 3 \t;rcx is now holding in how much bytes e need to shrink the stack\n") 
-           ^(Printf.sprintf "\tadd rsp, rcx\t ;shrinking the stack\n") (*stack is shrinked*)
+           ^(Printf.sprintf "\tshl rcx, 3 ;rcx is now holding in how much bytes e need to shrink the stack\n") 
+           ^(Printf.sprintf "\tadd rsp, rcx ;shrinking the stack\n") (*stack is shrinked*)
            
  
            (*put list at the top - rdi is in how many bytes the stack was shrinked*)
            ^"\tmov rax, rsp\n"
-           ^"\tsub rax, rcx \t ;now rax is pointing on the original ret\n" (*now rax is poinitng to the original stack place - ret*)
+           ^"\tsub rax, rcx ;now rax is pointing on the original ret\n" (*now rax is poinitng to the original stack place - ret*)
 
            (*entering the list - r9*)
-           ^"\tmov r8, qword[rax + 2 * 8]\t ;r8 is holding the arg count including opt\n"
-           ^"\tdec r8 \t ;we start with param 0, not 1 \n"
-           ^"\tadd rax, 3 * 8 \t;now rax is param 0\n"
-           ^"\tshl r8, 3 \t; convert to byte\n"
-           ^"\tadd rax, r8 \t;now rax is the top of the stack\n"
-            ^"\tmov qword[rax], r9\t;puting the list at the top\n"
+           ^"\tmov r8, qword[rax + 2 * 8] ;r8 is holding the arg count including opt\n"
+           ^"\tdec r8 ;we start with param 0, not 1 \n"
+           ^"\tadd rax, 3 * 8;now rax is param 0\n"
+           ^"\tshl r8, 3;convert to byte\n"
+           ^"\tadd rax, r8;now rax is the top of the stack\n"
+            ^"\tmov qword[rax], r9;puting the list at the top\n"
 
             (*now we want to copy the params - let's start that rax will point to the top of param*)
-            ^"\tsub rax, 8\t ;rax is the adress to copy to the not optional params\n"
+            ^"\tsub rax, 8;rax is the adress to copy to the not optional params\n"
 
             (*let rbx be the params to copy*)
             ^"\tmov rbx, rsp \n"
-            ^"\tsub rbx, rcx \t;rbx is the ret adress in the original\n"
-            ^(Printf.sprintf "\tmov r10, %d \t ;r10 is the not opt params length\n" (List.length params'))
+            ^"\tsub rbx, rcx;rbx is the ret adress in the original\n"
+            ^(Printf.sprintf "\tmov r10, %d;r10 is the not opt params length\n" (List.length params'))
             ^"\tdec r10 \n"
-            ^"\tshl r10, 3\t;to get bytes\n"
-            ^"\tadd rbx, 3*8 \t;rbx is the first param\n"
-            ^"\tadd rbx, r10 \t; rbx is where the address to copy to\n"           
+            ^"\tshl r10, 3;to get bytes\n"
+            ^"\tadd rbx, 3*8;rbx is the first param\n"
+            ^"\tadd rbx, r10; rbx is where the address to copy to\n"           
            (*rbx - params to copy*)
            (*rax - adress to copy to*)
 
